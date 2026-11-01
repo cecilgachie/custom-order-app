@@ -1,42 +1,56 @@
 {
   "expo": {
-    "name": "vaticancakes",
-    "slug": "vaticancakes",
+    "name": "Vatican Cake Point",
+    "slug": "vatican-cake-point",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "vaticancakes",
-    "userInterfaceStyle": "automatic",
+    "scheme": "vaticancakeapp",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
-      "icon": "./assets/expo.icon"
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vaticancakepoint.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#F5F5F5"
       },
-      "predictiveBackGestureEnabled": false
+      "package": "com.vaticancakepoint.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "data": [
+            {
+              "scheme": "vaticancakeapp"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
     "web": {
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "bundler": "metro"
     },
     "plugins": [
       "expo-router",
-      [
-        "expo-splash-screen",
-        {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
-        }
-      ]
+      "expo-secure-store",
+      "expo-sharing",
+      "expo-web-browser",
+      "expo-status-bar"
     ],
-    "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d1154485-239a-43a0-86b1-81abdb222a75"
+      }
     }
   }
 }
