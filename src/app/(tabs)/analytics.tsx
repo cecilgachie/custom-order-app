@@ -1,12 +1,11 @@
-import * as Print from "expo-print";
-import * as Sharing from "expo-sharing";
 import { useFocusEffect } from "expo-router";
 import { CalendarDays, Cake, Download, Heart, Layers, Receipt, TrendingUp } from "lucide-react-native";
 import { ReactNode, useCallback, useMemo, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Colors } from "../../constants/Colors";
 import { useAppToast } from "../../context/ToastContext";
+import { escapeHtml, pdfDocument, sharePdf } from "../../lib/pdf";
 import { supabase } from "../../lib/supabase";
 
 /* ------------------------------------------------------------------ */
@@ -41,7 +40,6 @@ const BAR_AREA = 110;
 const pad = (n: number) => String(n).padStart(2, "0");
 const kes = (n: number) => `KES ${Math.round(n).toLocaleString()}`;
 const compactKes = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n)));
-const escapeHtml = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const titleCase = (s: string) => s.trim().toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 const monthKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 const todayISO = () => {
@@ -83,6 +81,7 @@ export default function AnalyticsScreen() {
   const [range, setRange] = useState<RangeKey>("6M");
   const [picked, setPicked] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [customerName, setCustomerName] = useState<string | null>(null);
 
   const load = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true);
@@ -99,6 +98,9 @@ export default function AnalyticsScreen() {
         .eq("user_id", user.id);
       if (error) throw error;
       setOrders((data as OrderRow[]) || []);
+
+      const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle();
+      setCustomerName(profile?.full_name ?? null);
     } catch (e: any) {
       setLoadError(e?.message || "Could not load your analytics.");
     } finally {
@@ -164,7 +166,9 @@ export default function AnalyticsScreen() {
 
     const outstanding = placed.reduce((s, o) => s + Math.max(0, (Number(o.total_price) || 0) - paidOf(o)), 0);
 
-    return { series, maxValue, invested, avgOrder, count: inRange.length, flavors, sizeCount, sizeTotal, upcoming, outstanding };
+    const recent = [...inRange].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 10);
+
+    return { series, maxValue, invested, avgOrder, count: inRange.length, flavors, sizeCount, sizeTotal, upcoming, outstanding, recent };
   }, [orders, range]);
 
   const selected = picked !== null && picked < data.series.length ? picked : data.series.length - 1;
@@ -175,55 +179,108 @@ export default function AnalyticsScreen() {
     if (exporting) return;
     setExporting(true);
     try {
-      const generated = `${new Date().getDate()} ${MONTHS[new Date().getMonth()]} ${new Date().getFullYear()}`;
-      const bars = data.series
+      const now = new Date();
+      const generated = `${now.getDate()} ${MONTHS[now.getMonth()]} ${now.getFullYear()}`;
+      const rangeMonths = RANGES.find((r) => r.key === range)!.months;
+      const rangeLabel = rangeMonths === 0 ? "All time" : `Last ${rangeMonths} months`;
+      const shortDate = (iso: string) => {
+        const d = new Date(iso);
+        return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+      };
+
+      const tiles = [
+        ["Total invested", kes(data.invested)],
+        ["Cakes ordered", String(data.count)],
+        ["Average order", kes(data.avgOrder)],
+        ["Balance outstanding", kes(data.outstanding)],
+      ]
+        .map(([l, v]) => `<div class="tile"><div class="l">${escapeHtml(l)}</div><div class="v">${escapeHtml(v)}</div></div>`)
+        .join("");
+
+      const monthRows = data.series
         .map(
-          (s) => `<tr><td style="width:46px">${escapeHtml(s.label)}</td>
-            <td><div style="background:#F5EEE2;border-radius:4px;height:14px"><div style="background:#B08D57;border-radius:4px;height:14px;width:${Math.round((s.value / data.maxValue) * 100)}%"></div></div></td>
-            <td class="right" style="width:110px">${escapeHtml(kes(s.value))}</td></tr>`
+          (s) => `<tr>
+            <td style="width:80px">${escapeHtml(s.label)} ${escapeHtml(s.key.slice(0, 4))}</td>
+            <td><div class="bar"><i style="width:${Math.round((s.value / data.maxValue) * 100)}%"></i></div></td>
+            <td class="right" style="width:120px">${escapeHtml(kes(s.value))}</td></tr>`
         )
         .join("");
+
       const flavorRows = data.flavors
         .slice(0, 8)
-        .map((f) => `<tr><td>${escapeHtml(f.name)}</td><td class="right">${f.count} order${f.count === 1 ? "" : "s"}</td><td class="right">${f.pct}%</td></tr>`)
+        .map(
+          (f) => `<tr><td>${escapeHtml(f.name)}</td>
+            <td style="width:34%"><div class="bar"><i style="width:${Math.max(4, f.pct)}%"></i></div></td>
+            <td class="right" style="width:90px">${f.count} order${f.count === 1 ? "" : "s"}</td>
+            <td class="right" style="width:50px">${f.pct}%</td></tr>`
+        )
         .join("");
+
+      const sizeRows = SIZES.map((s) => {
+        const count = data.sizeCount[s];
+        const pct = data.sizeTotal ? Math.round((count / data.sizeTotal) * 100) : 0;
+        return `<tr><td>${s}</td><td class="right">${count} cake${count === 1 ? "" : "s"}</td><td class="right" style="width:50px">${pct}%</td></tr>`;
+      }).join("");
+
       const upcomingRows = data.upcoming
         .slice(0, 8)
-        .map((o) => `<tr><td>${escapeHtml(o.cake_title)}<br/><span class="muted">${escapeHtml(o.order_number || "")}</span></td><td class="right">${escapeHtml(formatEvent(o.event_date!))}</td></tr>`)
+        .map((o) => {
+          const d = daysUntil(o.event_date!);
+          return `<tr><td>${escapeHtml(formatEvent(o.event_date!))}</td>
+            <td>${escapeHtml(o.cake_title)}<br/><span class="muted">${escapeHtml(o.order_number || "")}</span></td>
+            <td class="right">${d === 0 ? "Today" : d === 1 ? "Tomorrow" : `In ${d} days`}</td></tr>`;
+        })
         .join("");
 
-      const html = `<html><head><meta charset="utf-8" /><style>
-        body{font-family:-apple-system,Helvetica,Arial,sans-serif;color:#1F1612;padding:36px;max-width:680px;margin:0 auto}
-        .brand{font-size:22px;font-weight:700} .tag{color:#B08D57;font-size:12px;letter-spacing:1px}
-        .head{border-bottom:2px solid #B08D57;padding-bottom:14px;margin-bottom:22px}
-        h2{font-size:15px;margin:26px 0 8px} table{width:100%;border-collapse:collapse;font-size:13px}
-        td{padding:8px 0;border-bottom:1px solid #ECE6DD;vertical-align:middle} .right{text-align:right} .muted{color:#6B5F57;font-size:12px}
-        .grid{display:flex;gap:12px} .box{flex:1;background:#F5EEE2;border-radius:10px;padding:14px}
-        .box .v{font-size:20px;font-weight:800;margin-top:4px} .box .l{color:#6B5F57;font-size:12px}
-      </style></head><body>
-        <div class="head"><div class="brand">Vatican Cake Point</div><div class="tag">MY CAKE ANALYTICS</div>
-          <div class="muted" style="margin-top:6px">Generated ${escapeHtml(generated)}, range: ${escapeHtml(range === "All" ? "all time" : `last ${range}`)}</div></div>
-        <div class="grid">
-          <div class="box"><div class="l">Total invested</div><div class="v">${escapeHtml(kes(data.invested))}</div></div>
-          <div class="box"><div class="l">Cakes ordered</div><div class="v">${data.count}</div></div>
-          <div class="box"><div class="l">Average order</div><div class="v">${escapeHtml(kes(data.avgOrder))}</div></div>
-        </div>
-        <h2>Spending by month</h2><table>${bars}</table>
-        <h2>Flavors you order</h2><table>${flavorRows || '<tr><td>No orders in this range.</td></tr>'}</table>
-        <h2>Upcoming events</h2><table>${upcomingRows || '<tr><td>No upcoming events.</td></tr>'}</table>
-        ${data.outstanding > 0 ? `<p class="muted" style="margin-top:20px">Outstanding balance across your orders: <strong>${escapeHtml(kes(data.outstanding))}</strong></p>` : ""}
-      </body></html>`;
+      const recentRows = data.recent
+        .map(
+          (o) => `<tr><td>${escapeHtml(shortDate(o.created_at))}</td>
+            <td>${escapeHtml(o.cake_title)}<br/><span class="muted">${escapeHtml(o.order_number || "")}</span></td>
+            <td class="right">${escapeHtml(kes(Number(o.total_price) || 0))}</td>
+            <td class="right">${escapeHtml(kes(paidOf(o)))}</td>
+            <td>${escapeHtml(o.order_status || "Pending Review")}</td></tr>`
+        )
+        .join("");
 
-      if (Platform.OS === "web") {
-        await Print.printAsync({ html });
-        return;
-      }
-      const { uri } = await Print.printToFileAsync({ html, width: 595, height: 842 });
-      if (!(await Sharing.isAvailableAsync())) {
-        showToast("Sharing is not available on this device.", { type: "error" });
-        return;
-      }
-      await Sharing.shareAsync(uri, { mimeType: "application/pdf", UTI: "com.adobe.pdf", dialogTitle: "My cake analytics" });
+      const body = `
+        <div class="tiles">${tiles}</div>
+
+        <h2>Spending by month</h2>
+        <table>${monthRows}</table>
+
+        <h2>Flavors you order</h2>
+        <table>${flavorRows || '<tr><td class="muted">No orders in this period.</td></tr>'}</table>
+
+        <h2>Size mix</h2>
+        <table>${data.sizeTotal ? sizeRows : '<tr><td class="muted">No size data in this period.</td></tr>'}</table>
+
+        <h2>Upcoming events</h2>
+        <table>
+          ${upcomingRows ? "<tr><th>Date</th><th>Cake</th><th class=\"right\">When</th></tr>" + upcomingRows : '<tr><td class="muted">No upcoming events.</td></tr>'}
+        </table>
+
+        <h2>Recent orders</h2>
+        <table>
+          ${recentRows ? "<tr><th>Placed</th><th>Cake</th><th class=\"right\">Total</th><th class=\"right\">Paid</th><th>Stage</th></tr>" + recentRows : '<tr><td class="muted">No orders in this period.</td></tr>'}
+        </table>
+
+        ${data.outstanding > 0 ? `<div class="note">Outstanding balance across your orders: <strong>${escapeHtml(kes(data.outstanding))}</strong>, due at delivery.</div>` : ""}`;
+
+      const html = pdfDocument({
+        title: "Cake ordering report",
+        meta: [
+          ["Prepared for", customerName || "Valued customer"],
+          ["Period", rangeLabel],
+          ["Generated", generated],
+        ],
+        body,
+      });
+
+      const ok = await sharePdf(html, {
+        filename: `Vatican-Cake-Point-Report-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`,
+        dialogTitle: "My cake ordering report",
+      });
+      if (!ok) showToast("Sharing is not available on this device.", { type: "error" });
     } catch (e: any) {
       showToast(e?.message || "Could not create the PDF.", { type: "error" });
     } finally {

@@ -1,13 +1,12 @@
-import * as Print from "expo-print";
-import * as Sharing from "expo-sharing";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { CheckCircle2, Download, Receipt, XCircle } from "lucide-react-native";
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Colors } from "../constants/Colors";
 import { useAppToast } from "../context/ToastContext";
 import { maskPhone } from "../lib/mpesa";
+import { sharePdf } from "../lib/pdf";
 import { supabase } from "../lib/supabase";
 
 type PaymentRow = {
@@ -168,20 +167,11 @@ export default function ReceiptScreen() {
     setDownloading(true);
     try {
       const html = buildReceiptHtml(payment, orders);
-      if (Platform.OS === "web") {
-        await Print.printAsync({ html });
-        return;
-      }
-      const { uri } = await Print.printToFileAsync({ html, width: 595, height: 842 });
-      if (!(await Sharing.isAvailableAsync())) {
-        showToast("Sharing is not available on this device.", { type: "error" });
-        return;
-      }
-      await Sharing.shareAsync(uri, {
-        mimeType: "application/pdf",
-        UTI: "com.adobe.pdf",
+      const ok = await sharePdf(html, {
+        filename: `Vatican-Receipt-${payment.receipt_number ?? payment.id}`,
         dialogTitle: `Receipt ${payment.receipt_number ?? ""}`.trim(),
       });
+      if (!ok) showToast("Sharing is not available on this device.", { type: "error" });
     } catch (e: any) {
       showToast(e?.message || "Could not create the receipt PDF.", { type: "error" });
     } finally {

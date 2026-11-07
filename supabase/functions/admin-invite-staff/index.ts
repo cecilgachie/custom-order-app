@@ -69,7 +69,10 @@ Deno.serve(async (req) => {
     }
 
     if (!isSystemAdminRole(callerProfile?.system_role)) {
-      return json({ ok: false, error: "Only System_Admin can send invites." }, 403);
+      return json(
+        { ok: false, error: "Only System_Admin can send invites." },
+        403,
+      );
     }
 
     let body: any;
@@ -108,16 +111,26 @@ Deno.serve(async (req) => {
     if (inviteData?.user?.id) {
       const { error: profileUpsertError } = await adminClient
         .from("profiles")
-        .upsert({ id: inviteData.user.id, system_role: role }, { onConflict: "id" });
+        .upsert(
+          { id: inviteData.user.id, system_role: role },
+          { onConflict: "id" },
+        );
 
       if (profileUpsertError) {
         return json({ ok: false, error: profileUpsertError.message }, 400);
       }
     }
 
-    return json({ ok: true, message: `Invite sent to ${email}.`, user_id: inviteData?.user?.id ?? null });
+    return json({
+      ok: true,
+      message: `Invite sent to ${email}.`,
+      user_id: inviteData?.user?.id ?? null,
+    });
   } catch (e) {
     console.error("admin-invite-staff failed", e);
-    return json({ ok: false, error: "Could not complete the invitation." }, 500);
+    return json(
+      { ok: false, error: "Could not complete the invitation." },
+      500,
+    );
   }
 });

@@ -1,12 +1,13 @@
-import { Session } from "@supabase/supabase-js";
-import { Stack, useRouter, useSegments } from "expo-router";
-import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { Stack, useRouter, useSegments } from "expo-router";
+import { StatusBar } from "expo-status-bar";
+import { Session } from "@supabase/supabase-js";
 import { Colors } from "../constants/Colors";
-import { ToastProvider } from "../context/ToastContext";
-import { isAdminRole } from "../lib/adminAuth";
 import { supabase } from "../lib/supabase";
+import { ToastProvider } from "../context/ToastContext";
+
+const ADMIN_ROLES = ["System_Admin", "Staff_Admin"];
 
 // Shared header look for the screens that use a native header (profile pages)
 const brandedHeader = {
@@ -24,9 +25,7 @@ export default function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   // Remember WHICH user the role belongs to, so a stale role is never used
-  const [role, setRole] = useState<{ userId: string; value: string } | null>(
-    null,
-  );
+  const [role, setRole] = useState<{ userId: string; value: string } | null>(null);
 
   /* ---------- 1. session ---------- */
   useEffect(() => {
@@ -110,9 +109,7 @@ export default function RootLayout() {
       return;
     }
 
-    const isAdmin = isAdminRole(userRole);
-
-    if (isAdmin) {
+    if (userRole && ADMIN_ROLES.includes(userRole)) {
       if (!inAdminGroup) router.replace("/(admin)");
     } else if (inAuthGroup || inAdminGroup) {
       router.replace("/(tabs)");
@@ -124,23 +121,15 @@ export default function RootLayout() {
     <ToastProvider>
       <StatusBar style="dark" />
 
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: Colors.background },
-        }}
-      >
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: Colors.background } }}>
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(tabs)" options={{ gestureEnabled: false }} />
         <Stack.Screen name="(admin)" options={{ gestureEnabled: false }} />
-        <Stack.Screen
-          name="profile/index"
-          options={{ ...brandedHeader, title: "My profile" }}
-        />
-        <Stack.Screen
-          name="profile/file-complaint"
-          options={{ ...brandedHeader, title: "Support complaint" }}
-        />
+        <Stack.Screen name="profile/index" options={{ ...brandedHeader, title: "My profile" }} />
+        <Stack.Screen name="profile/file-complaint" options={{ ...brandedHeader, title: "Support complaint" }} />
+        <Stack.Screen name="profile/analytics" options={{ ...brandedHeader, title: "My analytics" }} />
+        <Stack.Screen name="receipt" options={{ ...brandedHeader, title: "Receipt" }} />
+        <Stack.Screen name="nova" options={{ ...brandedHeader, title: "Nova" }} />
       </Stack>
 
       {/* Covers the app until we know who is signed in, so nobody sees a
@@ -148,11 +137,7 @@ export default function RootLayout() {
       {loading && (
         <View style={styles.splash} pointerEvents="auto">
           <Text style={styles.splashBrand}>Vatican Cake Point</Text>
-          <ActivityIndicator
-            size="small"
-            color={Colors.gold}
-            style={{ marginTop: 16 }}
-          />
+          <ActivityIndicator size="small" color={Colors.gold} style={{ marginTop: 16 }} />
         </View>
       )}
     </ToastProvider>
@@ -161,16 +146,11 @@ export default function RootLayout() {
 
 const styles = StyleSheet.create({
   splash: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: Colors.background,
     justifyContent: "center",
     alignItems: "center",
     zIndex: 100,
   },
-  splashBrand: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: Colors.ink,
-    letterSpacing: -0.3,
-  },
+  splashBrand: { fontSize: 24, fontWeight: "700", color: Colors.ink, letterSpacing: -0.3 },
 });

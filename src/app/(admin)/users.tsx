@@ -1,25 +1,31 @@
 import { useFocusEffect } from "expo-router";
-import { ShieldAlert, ShieldCheck, ShieldUser, UserX, UserCheck } from "lucide-react-native";
+import {
+    ShieldAlert,
+    ShieldCheck,
+    ShieldUser,
+    UserCheck,
+    UserX,
+} from "lucide-react-native";
 import { useCallback, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
-  FlatList,
-  Modal,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    FlatList,
+    Modal,
+    Pressable,
+    RefreshControl,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from "react-native";
 import { Colors } from "../../constants/Colors";
 import { useAppToast } from "../../context/ToastContext";
 import {
-  getCurrentUserRole,
-  isAdminRole,
-  isSystemAdminRole,
-  normalizeRole,
-  type SystemRole,
+    getCurrentUserRole,
+    isAdminRole,
+    isSystemAdminRole,
+    normalizeRole,
+    type SystemRole,
 } from "../../lib/adminAuth";
 import { supabase } from "../../lib/supabase";
 
@@ -37,7 +43,12 @@ type ProfileRow = {
   suspended_at?: string | null;
 };
 
-const FILTERS: RoleFilter[] = ["All", "System_Admin", "Staff_Admin", "Customer"];
+const FILTERS: RoleFilter[] = [
+  "All",
+  "System_Admin",
+  "Staff_Admin",
+  "Customer",
+];
 
 export default function AdminUsersScreen() {
   const { showToast } = useAppToast();
@@ -51,40 +62,49 @@ export default function AdminUsersScreen() {
 
   const [warnModalUser, setWarnModalUser] = useState<ProfileRow | null>(null);
   const [warnNote, setWarnNote] = useState("");
-  const [suspendModalUser, setSuspendModalUser] = useState<ProfileRow | null>(null);
+  const [suspendModalUser, setSuspendModalUser] = useState<ProfileRow | null>(
+    null,
+  );
   const [suspendReason, setSuspendReason] = useState("");
 
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<"System_Admin" | "Staff_Admin">("Staff_Admin");
+  const [inviteRole, setInviteRole] = useState<"System_Admin" | "Staff_Admin">(
+    "Staff_Admin",
+  );
   const [inviting, setInviting] = useState(false);
 
-  const load = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    setLoading(!isRefresh);
-    try {
-      const currentRole = await getCurrentUserRole();
-      if (!isAdminRole(currentRole)) {
-        showToast("You are not allowed to access this section.", { type: "error" });
-        setRows([]);
-        return;
+  const load = useCallback(
+    async (isRefresh = false) => {
+      if (isRefresh) setRefreshing(true);
+      setLoading(!isRefresh);
+      try {
+        const currentRole = await getCurrentUserRole();
+        if (!isAdminRole(currentRole)) {
+          showToast("You are not allowed to access this section.", {
+            type: "error",
+          });
+          setRows([]);
+          return;
+        }
+        setRole(currentRole || "Customer");
+
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("*")
+          .order("full_name", { ascending: true })
+          .limit(500);
+
+        if (error) throw error;
+        setRows((data as ProfileRow[]) || []);
+      } catch (e: any) {
+        showToast(e?.message || "Could not load users.", { type: "error" });
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
       }
-      setRole(currentRole || "Customer");
-
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(500);
-
-      if (error) throw error;
-      setRows((data as ProfileRow[]) || []);
-    } catch (e: any) {
-      showToast(e?.message || "Could not load users.", { type: "error" });
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [showToast]);
+    },
+    [showToast],
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -94,7 +114,9 @@ export default function AdminUsersScreen() {
 
   const visibleRows = useMemo(() => {
     if (filter === "All") return rows;
-    return rows.filter((r) => normalizeRole(r.system_role) === normalizeRole(filter));
+    return rows.filter(
+      (r) => normalizeRole(r.system_role) === normalizeRole(filter),
+    );
   }, [rows, filter]);
 
   const runUserAction = async (userId: string, work: () => Promise<void>) => {
@@ -164,9 +186,12 @@ export default function AdminUsersScreen() {
 
     setInviting(true);
     try {
-      const { data, error } = await supabase.functions.invoke("admin-invite-staff", {
-        body: { email, role: inviteRole },
-      });
+      const { data, error } = await supabase.functions.invoke(
+        "admin-invite-staff",
+        {
+          body: { email, role: inviteRole },
+        },
+      );
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error || "Invite failed.");
 
@@ -190,11 +215,22 @@ export default function AdminUsersScreen() {
       <View style={styles.userCard}>
         <View style={styles.userTopRow}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.userName}>{item.full_name || item.username || "Unnamed account"}</Text>
+            <Text style={styles.userName}>
+              {item.full_name || item.username || "Unnamed account"}
+            </Text>
             <Text style={styles.userMeta}>{item.email || item.id}</Text>
           </View>
-          <View style={[styles.roleBadge, suspended && styles.roleBadgeSuspended]}>
-            <Text style={[styles.roleBadgeText, suspended && styles.roleBadgeTextSuspended]}>{roleLabel}</Text>
+          <View
+            style={[styles.roleBadge, suspended && styles.roleBadgeSuspended]}
+          >
+            <Text
+              style={[
+                styles.roleBadgeText,
+                suspended && styles.roleBadgeTextSuspended,
+              ]}
+            >
+              {roleLabel}
+            </Text>
           </View>
         </View>
 
@@ -202,7 +238,9 @@ export default function AdminUsersScreen() {
           {warned ? (
             <View style={styles.flagChipWarn}>
               <ShieldAlert size={12} color="#A66A00" />
-              <Text style={styles.flagChipWarnText}>Warned ({item.warning_count || 1})</Text>
+              <Text style={styles.flagChipWarnText}>
+                Warned ({item.warning_count || 1})
+              </Text>
             </View>
           ) : (
             <View style={styles.flagChipOk}>
@@ -251,7 +289,9 @@ export default function AdminUsersScreen() {
             {busy ? (
               <ActivityIndicator color="#FFF" size="small" />
             ) : (
-              <Text style={styles.actionBtnText}>{suspended ? "Unsuspend" : "Suspend"}</Text>
+              <Text style={styles.actionBtnText}>
+                {suspended ? "Unsuspend" : "Suspend"}
+              </Text>
             )}
           </Pressable>
         </View>
@@ -285,7 +325,9 @@ export default function AdminUsersScreen() {
         ListHeaderComponent={
           <View style={styles.headerWrap}>
             <Text style={styles.title}>User Management</Text>
-            <Text style={styles.subtitle}>Moderation controls and role-based account review</Text>
+            <Text style={styles.subtitle}>
+              Moderation controls and role-based account review
+            </Text>
 
             <FlatList
               horizontal
@@ -298,9 +340,19 @@ export default function AdminUsersScreen() {
                 return (
                   <Pressable
                     onPress={() => setFilter(item)}
-                    style={[styles.filterChip, active && styles.filterChipActive]}
+                    style={[
+                      styles.filterChip,
+                      active && styles.filterChipActive,
+                    ]}
                   >
-                    <Text style={[styles.filterText, active && styles.filterTextActive]}>{item}</Text>
+                    <Text
+                      style={[
+                        styles.filterText,
+                        active && styles.filterTextActive,
+                      ]}
+                    >
+                      {item}
+                    </Text>
                   </Pressable>
                 );
               }}
@@ -310,7 +362,9 @@ export default function AdminUsersScreen() {
               <View style={styles.inviteCard}>
                 <View style={styles.inviteHeader}>
                   <ShieldUser size={16} color={Colors.gold} />
-                  <Text style={styles.inviteTitle}>Staff Invitation Pipeline</Text>
+                  <Text style={styles.inviteTitle}>
+                    Staff Invitation Pipeline
+                  </Text>
                 </View>
 
                 <TextInput
@@ -330,7 +384,10 @@ export default function AdminUsersScreen() {
                       <Pressable
                         key={r}
                         onPress={() => setInviteRole(r)}
-                        style={[styles.rolePickerBtn, active && styles.rolePickerBtnActive]}
+                        style={[
+                          styles.rolePickerBtn,
+                          active && styles.rolePickerBtnActive,
+                        ]}
                       >
                         <Text
                           style={[
@@ -361,7 +418,9 @@ export default function AdminUsersScreen() {
           </View>
         }
         contentContainerStyle={styles.content}
-        ListEmptyComponent={<Text style={styles.empty}>No users in this filter.</Text>}
+        ListEmptyComponent={
+          <Text style={styles.empty}>No users in this filter.</Text>
+        }
       />
 
       <Modal transparent visible={Boolean(warnModalUser)} animationType="fade">
@@ -376,7 +435,10 @@ export default function AdminUsersScreen() {
               style={styles.input}
             />
             <View style={styles.modalActions}>
-              <Pressable style={styles.modalBtnGhost} onPress={() => setWarnModalUser(null)}>
+              <Pressable
+                style={styles.modalBtnGhost}
+                onPress={() => setWarnModalUser(null)}
+              >
                 <Text style={styles.modalGhostText}>Cancel</Text>
               </Pressable>
               <Pressable style={styles.modalBtnPrimary} onPress={warnUser}>
@@ -387,7 +449,11 @@ export default function AdminUsersScreen() {
         </View>
       </Modal>
 
-      <Modal transparent visible={Boolean(suspendModalUser)} animationType="fade">
+      <Modal
+        transparent
+        visible={Boolean(suspendModalUser)}
+        animationType="fade"
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Suspend User</Text>
@@ -399,11 +465,17 @@ export default function AdminUsersScreen() {
               style={styles.input}
             />
             <View style={styles.modalActions}>
-              <Pressable style={styles.modalBtnGhost} onPress={() => setSuspendModalUser(null)}>
+              <Pressable
+                style={styles.modalBtnGhost}
+                onPress={() => setSuspendModalUser(null)}
+              >
                 <Text style={styles.modalGhostText}>Cancel</Text>
               </Pressable>
               <Pressable
-                style={[styles.modalBtnPrimary, { backgroundColor: Colors.danger }]}
+                style={[
+                  styles.modalBtnPrimary,
+                  { backgroundColor: Colors.danger },
+                ]}
                 onPress={() => {
                   if (suspendModalUser) void toggleSuspend(suspendModalUser);
                 }}
@@ -421,7 +493,12 @@ export default function AdminUsersScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   content: { padding: 16, paddingBottom: 36 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: Colors.background },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Colors.background,
+  },
   loadingText: { marginTop: 10, color: Colors.inkSoft, fontSize: 14 },
 
   headerWrap: { marginBottom: 14 },
@@ -495,7 +572,12 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 10,
   },
-  userTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  userTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
   userName: { fontSize: 15, fontWeight: "700", color: Colors.ink },
   userMeta: { marginTop: 2, fontSize: 12.5, color: Colors.inkSoft },
   roleBadge: {
@@ -528,7 +610,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     height: 26,
   },
-  flagChipOkText: { fontSize: 11.5, fontWeight: "600", color: Colors.successGreen },
+  flagChipOkText: {
+    fontSize: 11.5,
+    fontWeight: "600",
+    color: Colors.successGreen,
+  },
   flagChipSuspended: {
     flexDirection: "row",
     alignItems: "center",
@@ -538,7 +624,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     height: 26,
   },
-  flagChipSuspendedText: { fontSize: 11.5, fontWeight: "600", color: Colors.danger },
+  flagChipSuspendedText: {
+    fontSize: 11.5,
+    fontWeight: "600",
+    color: Colors.danger,
+  },
 
   actionsRow: { marginTop: 12, flexDirection: "row", gap: 8 },
   actionBtn: {

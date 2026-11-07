@@ -1,9 +1,10 @@
 import { Tabs } from "expo-router";
 import {
-    ClipboardList,
-    LayoutDashboard,
-    ShieldUser,
-    Siren,
+  ClipboardList,
+  LayoutDashboard,
+  ShieldUser,
+  Siren,
+  User,
 } from "lucide-react-native";
 import { StyleSheet } from "react-native";
 import { Colors } from "../../constants/Colors";
@@ -33,11 +34,7 @@ export default function AdminLayout() {
         options={{
           tabBarLabel: "Overview",
           tabBarIcon: ({ color, size, focused }) => (
-            <LayoutDashboard
-              size={size}
-              color={color}
-              strokeWidth={focused ? 2.25 : 1.75}
-            />
+            <LayoutDashboard size={size} color={color} strokeWidth={focused ? 2.25 : 1.75} />
           ),
         }}
       />
@@ -46,11 +43,7 @@ export default function AdminLayout() {
         options={{
           tabBarLabel: "Orders",
           tabBarIcon: ({ color, size, focused }) => (
-            <ClipboardList
-              size={size}
-              color={color}
-              strokeWidth={focused ? 2.25 : 1.75}
-            />
+            <ClipboardList size={size} color={color} strokeWidth={focused ? 2.25 : 1.75} />
           ),
         }}
       />
@@ -59,11 +52,7 @@ export default function AdminLayout() {
         options={{
           tabBarLabel: "Users",
           tabBarIcon: ({ color, size, focused }) => (
-            <ShieldUser
-              size={size}
-              color={color}
-              strokeWidth={focused ? 2.25 : 1.75}
-            />
+            <ShieldUser size={size} color={color} strokeWidth={focused ? 2.25 : 1.75} />
           ),
         }}
       />
@@ -72,11 +61,18 @@ export default function AdminLayout() {
         options={{
           tabBarLabel: "Support",
           tabBarIcon: ({ color, size, focused }) => (
-            <Siren
-              size={size}
-              color={color}
-              strokeWidth={focused ? 2.25 : 1.75}
-            />
+            <Siren size={size} color={color} strokeWidth={focused ? 2.25 : 1.75} />
+          ),
+        }}
+      />
+      {/* Named "account", not "profile": /profile is already the customer route,
+          and Expo Router ignores the (admin) group in URLs, so the names would clash. */}
+      <Tabs.Screen
+        name="account"
+        options={{
+          tabBarLabel: "Account",
+          tabBarIcon: ({ color, size, focused }) => (
+            <User size={size} color={color} strokeWidth={focused ? 2.25 : 1.75} />
           ),
         }}
       />

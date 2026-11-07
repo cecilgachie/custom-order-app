@@ -1,19 +1,28 @@
 import { useFocusEffect } from "expo-router";
-import { AlertCircle, CalendarClock, CircleCheckBig, Search } from "lucide-react-native";
+import {
+    AlertCircle,
+    CalendarClock,
+    CircleCheckBig,
+    Search,
+} from "lucide-react-native";
 import { useCallback, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    FlatList,
+    Pressable,
+    RefreshControl,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from "react-native";
 import { Colors } from "../../constants/Colors";
 import { useAppToast } from "../../context/ToastContext";
-import { getCurrentUserRole, isAdminRole, normalizeRole } from "../../lib/adminAuth";
+import {
+    getCurrentUserRole,
+    isAdminRole,
+    normalizeRole,
+} from "../../lib/adminAuth";
 import { supabase } from "../../lib/supabase";
 
 type ComplaintRow = {
@@ -36,35 +45,42 @@ export default function AdminSupportDeskScreen() {
   const [query, setQuery] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const load = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    setLoading(!isRefresh);
+  const load = useCallback(
+    async (isRefresh = false) => {
+      if (isRefresh) setRefreshing(true);
+      setLoading(!isRefresh);
 
-    try {
-      const currentRole = await getCurrentUserRole();
-      setRole(currentRole || "Customer");
+      try {
+        const currentRole = await getCurrentUserRole();
+        setRole(currentRole || "Customer");
 
-      if (!isAdminRole(currentRole)) {
-        showToast("You do not have access to support controls.", { type: "error" });
-        setRows([]);
-        return;
+        if (!isAdminRole(currentRole)) {
+          showToast("You do not have access to support controls.", {
+            type: "error",
+          });
+          setRows([]);
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from("customer_complaints")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(400);
+
+        if (error) throw error;
+        setRows((data as ComplaintRow[]) || []);
+      } catch (e: any) {
+        showToast(e?.message || "Could not load support desk.", {
+          type: "error",
+        });
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
       }
-
-      const { data, error } = await supabase
-        .from("customer_complaints")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(400);
-
-      if (error) throw error;
-      setRows((data as ComplaintRow[]) || []);
-    } catch (e: any) {
-      showToast(e?.message || "Could not load support desk.", { type: "error" });
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [showToast]);
+    },
+    [showToast],
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -77,13 +93,21 @@ export default function AdminSupportDeskScreen() {
     if (!q) return rows;
 
     return rows.filter((row) =>
-      [row.complaint_category, row.complaint_body, row.order_id, row.resolution_status]
+      [
+        row.complaint_category,
+        row.complaint_body,
+        row.order_id,
+        row.resolution_status,
+      ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q)),
     );
   }, [rows, query]);
 
-  const setStatus = async (row: ComplaintRow, status: (typeof STATUSES)[number]) => {
+  const setStatus = async (
+    row: ComplaintRow,
+    status: (typeof STATUSES)[number],
+  ) => {
     if (busyId) return;
     if (!isAdminRole(role)) {
       showToast("Only admins can update complaints.", { type: "error" });
@@ -144,7 +168,9 @@ export default function AdminSupportDeskScreen() {
         ListHeaderComponent={
           <View style={styles.headerWrap}>
             <Text style={styles.title}>Resolution Desk</Text>
-            <Text style={styles.subtitle}>Escalated customer care workflow controls</Text>
+            <Text style={styles.subtitle}>
+              Escalated customer care workflow controls
+            </Text>
 
             <View style={styles.searchWrap}>
               <Search size={16} color={Colors.inkMuted} />
@@ -170,15 +196,25 @@ export default function AdminSupportDeskScreen() {
                 <View style={[styles.statusPill, statusTone(status)]}>
                   <Text style={styles.statusText}>{status}</Text>
                 </View>
-                <Text style={styles.orderRef}>Order: {item.order_id || "N/A"}</Text>
+                <Text style={styles.orderRef}>
+                  Order: {item.order_id || "N/A"}
+                </Text>
               </View>
 
-              <Text style={styles.category}>{item.complaint_category || "General complaint"}</Text>
-              <Text style={styles.bodyText}>{item.complaint_body || "No complaint body provided."}</Text>
+              <Text style={styles.category}>
+                {item.complaint_category || "General complaint"}
+              </Text>
+              <Text style={styles.bodyText}>
+                {item.complaint_body || "No complaint body provided."}
+              </Text>
 
               <View style={styles.metaRow}>
                 <CalendarClock size={14} color={Colors.inkMuted} />
-                <Text style={styles.metaText}>{item.created_at ? new Date(item.created_at).toLocaleString() : "Unknown date"}</Text>
+                <Text style={styles.metaText}>
+                  {item.created_at
+                    ? new Date(item.created_at).toLocaleString()
+                    : "Unknown date"}
+                </Text>
               </View>
 
               <View style={styles.actionRow}>
@@ -216,7 +252,9 @@ export default function AdminSupportDeskScreen() {
         ListEmptyComponent={
           <View style={styles.emptyWrap}>
             <AlertCircle size={22} color={Colors.inkMuted} />
-            <Text style={styles.emptyText}>No complaints match your search.</Text>
+            <Text style={styles.emptyText}>
+              No complaints match your search.
+            </Text>
           </View>
         }
       />
@@ -227,7 +265,12 @@ export default function AdminSupportDeskScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   content: { padding: 16, paddingBottom: 30 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: Colors.background },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Colors.background,
+  },
   loadingText: { marginTop: 10, color: Colors.inkSoft, fontSize: 14 },
 
   headerWrap: { marginBottom: 12 },
@@ -255,16 +298,35 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 10,
   },
-  topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  statusPill: { borderRadius: 999, paddingHorizontal: 10, height: 24, justifyContent: "center" },
+  topRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  statusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    height: 24,
+    justifyContent: "center",
+  },
   statusOpen: { backgroundColor: "#FFF4E0" },
   statusInvestigating: { backgroundColor: "#EAF4FF" },
   statusResolved: { backgroundColor: Colors.successTint },
   statusText: { color: Colors.ink, fontWeight: "700", fontSize: 11.5 },
   orderRef: { color: Colors.inkSoft, fontSize: 12 },
 
-  category: { marginTop: 10, fontWeight: "700", color: Colors.ink, fontSize: 14.5 },
-  bodyText: { marginTop: 5, color: Colors.inkSoft, lineHeight: 20, fontSize: 13.5 },
+  category: {
+    marginTop: 10,
+    fontWeight: "700",
+    color: Colors.ink,
+    fontSize: 14.5,
+  },
+  bodyText: {
+    marginTop: 5,
+    color: Colors.inkSoft,
+    lineHeight: 20,
+    fontSize: 13.5,
+  },
 
   metaRow: { marginTop: 8, flexDirection: "row", alignItems: "center", gap: 6 },
   metaText: { color: Colors.inkMuted, fontSize: 12.5 },
@@ -280,7 +342,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  actionBtnActive: { borderColor: Colors.gold, backgroundColor: Colors.goldTint },
+  actionBtnActive: {
+    borderColor: Colors.gold,
+    backgroundColor: Colors.goldTint,
+  },
   actionText: { color: Colors.inkSoft, fontSize: 12.5, fontWeight: "600" },
   actionTextActive: { color: Colors.ink, fontSize: 12.5, fontWeight: "700" },
   actionActiveWrap: { flexDirection: "row", alignItems: "center", gap: 5 },
