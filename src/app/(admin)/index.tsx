@@ -41,7 +41,7 @@ type Complaint = {
   resolution_status?: string | null;
   created_at?: string | null;
 };
-type Customer = { full_name?: string | null; email?: string | null };
+type Customer = { full_name?: string | null; username?: string | null };
 
 const STATUS_TONE: Record<Status, { bg: string; fg: string }> = {
   Open: { bg: Colors.dangerTint, fg: Colors.danger },
@@ -167,9 +167,9 @@ export default function MasterSystemDashboard() {
 
         const ids = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
         if (ids.length > 0) {
-          const { data: people } = await supabase.from("profiles").select("id, full_name, email").in("id", ids);
+          const { data: people } = await supabase.from("profiles").select("id, full_name, username").in("id", ids);
           const map: Record<string, Customer> = {};
-          (people || []).forEach((p: any) => (map[p.id] = { full_name: p.full_name, email: p.email }));
+          (people || []).forEach((p: any) => (map[p.id] = { full_name: p.full_name, username: p.username }));
           setCustomers(map);
         }
       }
@@ -213,7 +213,7 @@ export default function MasterSystemDashboard() {
 
   const customerLabel = (c: Complaint) => {
     const p = c.user_id ? customers[c.user_id] : undefined;
-    return p?.full_name || p?.email || "Unknown customer";
+    return p?.full_name || p?.username || "Unknown customer";
   };
 
   /* ---------- actions ---------- */

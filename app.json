@@ -16,10 +16,33 @@
         "ITSAppUsesNonExemptEncryption": false
       }
     },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#F5F5F5"
+    "expo": {
+      "icon": "./assets/images/icon.png",
+      "android": {
+        "adaptiveIcon": {
+          "foregroundImage": "./assets/images/adaptive-icon.png",
+          "backgroundColor": "#FFE7E7"
+        }
       },
+      "web": {
+        "favicon": "./assets/images/favicon.png"
+      },
+      "plugins": [
+        "expo-router",
+        [
+          "expo-splash-screen",
+          {
+            "backgroundColor": "#FFE7E7",
+            "image": "./assets/images/splash-icon.png",
+            "imageWidth": 260,
+            "resizeMode": "contain",
+            "android": {
+              "image": "./assets/images/adaptive-icon.png",
+              "imageWidth": 288
+            }
+          }
+        ]
+      ],
       "package": "com.vaticancakepoint.app",
       "intentFilters": [
         {
@@ -41,16 +64,27 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Vatican Cake Point to access your photos to upload custom cake reference designs."
+        }
+      ],
       "expo-secure-store",
       "expo-sharing",
       "expo-web-browser",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-image",
+      "expo-splash-screen"
     ],
     "extra": {
       "router": {},
       "eas": {
         "projectId": "d1154485-239a-43a0-86b1-81abdb222a75"
       }
+    },
+    "android": {
+      "package": "com.vaticancakepoint.app"
     }
   }
 }

@@ -1,15 +1,8 @@
 import * as AuthSession from "expo-auth-session";
 import { BlurView } from "expo-blur";
 import * as WebBrowser from "expo-web-browser";
-import {
-  Eye,
-  EyeOff,
-  KeyRound,
-  Lock,
-  Mail,
-  User,
-  X,
-} from "lucide-react-native";
+import { Eye, EyeOff, KeyRound, Lock, Mail, User, X } from "lucide-react-native";
+import { useRouter } from "expo-router";
 import { ReactNode, useState } from "react";
 import {
   ActivityIndicator,
@@ -27,6 +20,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Colors } from "../../constants/Colors";
+import { TERMS_VERSION } from "../../constants/legal";
+import { authCallbackUrl } from "../../lib/authRedirect";
 import { useAppToast } from "../../context/ToastContext";
 import {
   isSupabaseConfigured,
@@ -63,6 +58,7 @@ function Field({
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { showToast } = useAppToast();
 
   const [email, setEmail] = useState("");
@@ -81,17 +77,15 @@ export default function LoginScreen() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   /* ---------- helpers ---------- */
   const checkUsernameTaken = async (value: string) => {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("username", value)
-      .maybeSingle();
-
-    if (error && error.code !== "PGRST116") throw error;
-    return Boolean(data);
+    // A database function answers yes/no without exposing the profiles table
+    const { data, error } = await supabase.rpc("is_username_available", { p_username: value });
+    if (error) throw error;
+    return data === false;
   };
 
   const switchMode = (signUp: boolean) => {
@@ -108,8 +102,7 @@ export default function LoginScreen() {
     if (!isSupabaseConfigured) return showToast(supabaseConfigError);
 
     const cleanEmail = email.trim().toLowerCase();
-    if (!EMAIL_RE.test(cleanEmail))
-      return showToast("Enter a valid email address.");
+    if (!EMAIL_RE.test(cleanEmail)) return showToast("Enter a valid email address.");
     if (!password) return showToast("Enter your password.");
 
     setBusy("auth");
@@ -117,15 +110,11 @@ export default function LoginScreen() {
       if (isSignUp) {
         const cleanUsername = username.trim().toLowerCase();
         if (!USERNAME_RE.test(cleanUsername))
-          return showToast(
-            "Username needs 3 to 20 letters, numbers or underscores.",
-          );
+          return showToast("Username needs 3 to 20 letters, numbers or underscores.");
         if (password.length < MIN_PASSWORD)
-          return showToast(
-            `Password must be at least ${MIN_PASSWORD} characters.`,
-          );
-        if (password !== confirmPassword)
-          return showToast("Passwords do not match.");
+          return showToast(`Password must be at least ${MIN_PASSWORD} characters.`);
+        if (password !== confirmPassword) return showToast("Passwords do not match.");
+        if (!acceptedTerms) return showToast("Please accept the Terms of Service and Privacy Policy to create an account.");
 
         if (await checkUsernameTaken(cleanUsername))
           return showToast("That username is already taken.");
@@ -136,15 +125,21 @@ export default function LoginScreen() {
         const { data, error } = await supabase.auth.signUp({
           email: cleanEmail,
           password,
-          options: { data: { username: cleanUsername } },
+          options: {
+            emailRedirectTo: authCallbackUrl(),
+            data: {
+              username: cleanUsername,
+              // Record of what was agreed, and when
+              terms_version: TERMS_VERSION,
+              terms_accepted_at: new Date().toISOString(),
+            },
+          },
         });
         if (error) throw error;
 
         // With confirmation on, an existing email comes back with no identities
         if (data.user && data.user.identities?.length === 0)
-          return showToast(
-            "An account with this email already exists. Try signing in.",
-          );
+          return showToast("An account with this email already exists. Try signing in.");
 
         // Only possible when email confirmation is off and a session exists
         if (data.session && data.user) {
@@ -182,9 +177,7 @@ export default function LoginScreen() {
 
     setBusy("google");
     try {
-      const redirectUri = AuthSession.makeRedirectUri({
-        scheme: "vaticancakeapp",
-      });
+      const redirectUri = AuthSession.makeRedirectUri({ scheme: "vaticancakeapp" });
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -195,22 +188,15 @@ export default function LoginScreen() {
       const res = await WebBrowser.openAuthSessionAsync(data.url, redirectUri);
       if (res.type !== "success" || !res.url) return; // cancelled
 
-      const query = res.url.includes("#")
-        ? res.url.split("#")[1]
-        : res.url.split("?")[1];
+      const query = res.url.includes("#") ? res.url.split("#")[1] : res.url.split("?")[1];
       const params = new URLSearchParams(query ?? "");
       const access_token = params.get("access_token");
       const refresh_token = params.get("refresh_token");
 
       if (!access_token || !refresh_token)
-        return showToast(
-          "Google sign-in did not return a session. Please try again.",
-        );
+        return showToast("Google sign-in did not return a session. Please try again.");
 
-      const { error: sessionError } = await supabase.auth.setSession({
-        access_token,
-        refresh_token,
-      });
+      const { error: sessionError } = await supabase.auth.setSession({ access_token, refresh_token });
       if (sessionError) throw sessionError;
       showToast("Signed in with Google!");
     } catch (error: any) {
@@ -223,6 +209,7 @@ export default function LoginScreen() {
   /* ---------- password reset ---------- */
   const openForgot = () => {
     setResetEmail(email.trim());
+    setResetError(null);
     setResetStep("email");
     setResetCode("");
     setNewPassword("");
@@ -236,11 +223,11 @@ export default function LoginScreen() {
 
   const sendResetCode = async () => {
     if (resetBusy) return;
-    if (!isSupabaseConfigured) return showToast(supabaseConfigError);
+    setResetError(null);
+    if (!isSupabaseConfigured) return setResetError(supabaseConfigError);
 
     const cleanEmail = resetEmail.trim().toLowerCase();
-    if (!EMAIL_RE.test(cleanEmail))
-      return showToast("Enter a valid email address.");
+    if (!EMAIL_RE.test(cleanEmail)) return setResetError("Enter a valid email address.");
 
     setResetBusy(true);
     try {
@@ -248,9 +235,8 @@ export default function LoginScreen() {
       if (error) throw error;
       setResetEmail(cleanEmail);
       setResetStep("code");
-      showToast("If that email has an account, a reset code is on its way.");
     } catch (error: any) {
-      showToast(error?.message ?? "Could not send the reset code.");
+      setResetError(error?.message ?? "Could not send the reset code.");
     } finally {
       setResetBusy(false);
     }
@@ -258,13 +244,13 @@ export default function LoginScreen() {
 
   const confirmReset = async () => {
     if (resetBusy) return;
+    setResetError(null);
 
     const code = resetCode.replace(/\s/g, "");
-    if (code.length < 6) return showToast("Enter the code from your email.");
+    if (code.length < 6) return setResetError("Enter the code from your email.");
     if (newPassword.length < MIN_PASSWORD)
-      return showToast(`Password must be at least ${MIN_PASSWORD} characters.`);
-    if (newPassword !== confirmNewPassword)
-      return showToast("Passwords do not match.");
+      return setResetError(`Password must be at least ${MIN_PASSWORD} characters.`);
+    if (newPassword !== confirmNewPassword) return setResetError("Passwords do not match.");
 
     setResetBusy(true);
     try {
@@ -276,15 +262,13 @@ export default function LoginScreen() {
       if (verifyError) throw verifyError;
 
       // Same async step as verifyOtp: runs before the root guard can navigate away
-      const { error: updateError } = await supabase.auth.updateUser({
-        password: newPassword,
-      });
+      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
       if (updateError) throw updateError;
 
       showToast("Password updated. You are now signed in.");
       setForgotModal(false);
     } catch (error: any) {
-      showToast(error?.message ?? "Could not reset your password.");
+      setResetError(error?.message ?? "Could not reset your password.");
     } finally {
       setResetBusy(false);
     }
@@ -308,17 +292,12 @@ export default function LoginScreen() {
 
   return (
     <ImageBackground
-      source={{
-        uri: "https://images.unsplash.com/photo-1578985545062-69928b1d9587?w=800",
-      }}
+      source={{ uri: "https://images.unsplash.com/photo-1578985545062-69928b1d9587?w=800" }}
       style={styles.bg}
     >
       <View style={styles.scrim} />
 
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView
           contentContainerStyle={[
             styles.scroll,
@@ -330,9 +309,7 @@ export default function LoginScreen() {
           <BlurView intensity={70} tint="light" style={styles.glassContainer}>
             <Text style={styles.title}>Vatican Cake Point</Text>
             <Text style={styles.subtitle}>
-              {isSignUp
-                ? "Create an account to start ordering."
-                : "Sign in to order your dream cake."}
+              {isSignUp ? "Create an account to start ordering." : "Sign in to order your dream cake."}
             </Text>
 
             {/* Mode switch */}
@@ -343,19 +320,11 @@ export default function LoginScreen() {
                   <Pressable
                     key={String(signUp)}
                     onPress={() => switchMode(signUp)}
-                    style={[
-                      styles.segmentBtn,
-                      active && styles.segmentBtnActive,
-                    ]}
+                    style={[styles.segmentBtn, active && styles.segmentBtnActive]}
                     accessibilityRole="button"
                     accessibilityState={{ selected: active }}
                   >
-                    <Text
-                      style={[
-                        styles.segmentText,
-                        active && styles.segmentTextActive,
-                      ]}
-                    >
+                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
                       {signUp ? "Create account" : "Sign in"}
                     </Text>
                   </Pressable>
@@ -364,9 +333,7 @@ export default function LoginScreen() {
             </View>
 
             <Field
-              icon={
-                <Mail size={18} color={Colors.inkMuted} strokeWidth={1.75} />
-              }
+              icon={<Mail size={18} color={Colors.inkMuted} strokeWidth={1.75} />}
               placeholder="Email address"
               value={email}
               onChangeText={setEmail}
@@ -380,9 +347,7 @@ export default function LoginScreen() {
 
             {isSignUp && (
               <Field
-                icon={
-                  <User size={18} color={Colors.inkMuted} strokeWidth={1.75} />
-                }
+                icon={<User size={18} color={Colors.inkMuted} strokeWidth={1.75} />}
                 placeholder="Username"
                 value={username}
                 onChangeText={(t) => setUsername(t.toLowerCase())}
@@ -394,9 +359,7 @@ export default function LoginScreen() {
             )}
 
             <Field
-              icon={
-                <Lock size={18} color={Colors.inkMuted} strokeWidth={1.75} />
-              }
+              icon={<Lock size={18} color={Colors.inkMuted} strokeWidth={1.75} />}
               right={passwordToggle}
               placeholder="Password"
               value={password}
@@ -411,9 +374,7 @@ export default function LoginScreen() {
 
             {isSignUp && (
               <Field
-                icon={
-                  <Lock size={18} color={Colors.inkMuted} strokeWidth={1.75} />
-                }
+                icon={<Lock size={18} color={Colors.inkMuted} strokeWidth={1.75} />}
                 placeholder="Confirm password"
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
@@ -424,12 +385,31 @@ export default function LoginScreen() {
               />
             )}
 
-            {!isSignUp && (
+            {isSignUp && (
               <Pressable
-                onPress={openForgot}
-                hitSlop={8}
-                style={styles.forgotLink}
+                onPress={() => setAcceptedTerms((v) => !v)}
+                style={styles.consentRow}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: acceptedTerms }}
               >
+                <View style={[styles.checkbox, acceptedTerms && styles.checkboxOn]}>
+                  {acceptedTerms && <Text style={styles.checkMark}>✓</Text>}
+                </View>
+                <Text style={styles.consentText}>
+                  I agree to the{" "}
+                  <Text style={styles.legalLink} onPress={() => router.push("/legal/terms")}>
+                    Terms of Service
+                  </Text>{" "}
+                  and{" "}
+                  <Text style={styles.legalLink} onPress={() => router.push("/legal/privacy")}>
+                    Privacy Policy
+                  </Text>
+                </Text>
+              </Pressable>
+            )}
+
+            {!isSignUp && (
+              <Pressable onPress={openForgot} hitSlop={8} style={styles.forgotLink}>
                 <Text style={styles.linkText}>Forgot password?</Text>
               </Pressable>
             )}
@@ -447,9 +427,7 @@ export default function LoginScreen() {
               {busy === "auth" ? (
                 <ActivityIndicator color="#FFF" />
               ) : (
-                <Text style={styles.btnText}>
-                  {isSignUp ? "Create account" : "Sign in"}
-                </Text>
+                <Text style={styles.btnText}>{isSignUp ? "Create account" : "Sign in"}</Text>
               )}
             </Pressable>
 
@@ -475,18 +453,24 @@ export default function LoginScreen() {
                 <Text style={styles.googleText}>Continue with Google</Text>
               )}
             </Pressable>
+
+            <Text style={styles.legalNote}>
+              By continuing you agree to our{" "}
+              <Text style={styles.legalLink} onPress={() => router.push("/legal/terms")}>
+                Terms
+              </Text>{" "}
+              and{" "}
+              <Text style={styles.legalLink} onPress={() => router.push("/legal/privacy")}>
+                Privacy Policy
+              </Text>
+              .
+            </Text>
           </BlurView>
         </ScrollView>
       </KeyboardAvoidingView>
 
       {/* PASSWORD RESET */}
-      <Modal
-        visible={forgotModal}
-        transparent
-        animationType="fade"
-        onRequestClose={closeForgot}
-        statusBarTranslucent
-      >
+      <Modal visible={forgotModal} transparent animationType="fade" onRequestClose={closeForgot} statusBarTranslucent>
         <KeyboardAvoidingView
           style={styles.modalOverlay}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -496,30 +480,20 @@ export default function LoginScreen() {
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Reset your password</Text>
-              <Pressable
-                onPress={closeForgot}
-                hitSlop={10}
-                style={styles.modalClose}
-                accessibilityLabel="Close"
-              >
+              <Pressable onPress={closeForgot} hitSlop={10} style={styles.modalClose} accessibilityLabel="Close">
                 <X size={17} color={Colors.ink} />
               </Pressable>
             </View>
 
+            {!!resetError && <Text style={styles.resetError}>{resetError}</Text>}
+
             {resetStep === "email" ? (
               <>
                 <Text style={styles.modalText}>
-                  Enter your account email and we will send you a code to set a
-                  new password.
+                  Enter your account email and we will send you a code to set a new password.
                 </Text>
                 <Field
-                  icon={
-                    <Mail
-                      size={18}
-                      color={Colors.inkMuted}
-                      strokeWidth={1.75}
-                    />
-                  }
+                  icon={<Mail size={18} color={Colors.inkMuted} strokeWidth={1.75} />}
                   placeholder="Email address"
                   value={resetEmail}
                   onChangeText={setResetEmail}
@@ -532,33 +506,18 @@ export default function LoginScreen() {
                 <Pressable
                   onPress={sendResetCode}
                   disabled={resetBusy}
-                  style={({ pressed }) => [
-                    styles.mainBtn,
-                    pressed && { opacity: 0.9 },
-                    resetBusy && { opacity: 0.75 },
-                  ]}
+                  style={({ pressed }) => [styles.mainBtn, pressed && { opacity: 0.9 }, resetBusy && { opacity: 0.75 }]}
                 >
-                  {resetBusy ? (
-                    <ActivityIndicator color="#FFF" />
-                  ) : (
-                    <Text style={styles.btnText}>Send code</Text>
-                  )}
+                  {resetBusy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnText}>Send code</Text>}
                 </Pressable>
               </>
             ) : (
               <>
                 <Text style={styles.modalText}>
-                  We sent a code to {resetEmail}. Enter it below with your new
-                  password.
+                  We sent a code to {resetEmail}. Enter it below with your new password.
                 </Text>
                 <Field
-                  icon={
-                    <KeyRound
-                      size={18}
-                      color={Colors.inkMuted}
-                      strokeWidth={1.75}
-                    />
-                  }
+                  icon={<KeyRound size={18} color={Colors.inkMuted} strokeWidth={1.75} />}
                   placeholder="Code from email"
                   value={resetCode}
                   onChangeText={(t) => setResetCode(t.replace(/[^\d]/g, ""))}
@@ -568,13 +527,7 @@ export default function LoginScreen() {
                   textContentType="oneTimeCode"
                 />
                 <Field
-                  icon={
-                    <Lock
-                      size={18}
-                      color={Colors.inkMuted}
-                      strokeWidth={1.75}
-                    />
-                  }
+                  icon={<Lock size={18} color={Colors.inkMuted} strokeWidth={1.75} />}
                   right={passwordToggle}
                   placeholder="New password"
                   value={newPassword}
@@ -584,13 +537,7 @@ export default function LoginScreen() {
                   textContentType="newPassword"
                 />
                 <Field
-                  icon={
-                    <Lock
-                      size={18}
-                      color={Colors.inkMuted}
-                      strokeWidth={1.75}
-                    />
-                  }
+                  icon={<Lock size={18} color={Colors.inkMuted} strokeWidth={1.75} />}
                   placeholder="Confirm new password"
                   value={confirmNewPassword}
                   onChangeText={setConfirmNewPassword}
@@ -602,23 +549,11 @@ export default function LoginScreen() {
                 <Pressable
                   onPress={confirmReset}
                   disabled={resetBusy}
-                  style={({ pressed }) => [
-                    styles.mainBtn,
-                    pressed && { opacity: 0.9 },
-                    resetBusy && { opacity: 0.75 },
-                  ]}
+                  style={({ pressed }) => [styles.mainBtn, pressed && { opacity: 0.9 }, resetBusy && { opacity: 0.75 }]}
                 >
-                  {resetBusy ? (
-                    <ActivityIndicator color="#FFF" />
-                  ) : (
-                    <Text style={styles.btnText}>Update password</Text>
-                  )}
+                  {resetBusy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnText}>Update password</Text>}
                 </Pressable>
-                <Pressable
-                  onPress={() => setResetStep("email")}
-                  hitSlop={8}
-                  style={{ alignSelf: "center", marginTop: 14 }}
-                >
+                <Pressable onPress={() => setResetStep("email")} hitSlop={8} style={{ alignSelf: "center", marginTop: 14 }}>
                   <Text style={styles.linkText}>Use a different email</Text>
                 </Pressable>
               </>
@@ -632,13 +567,8 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   bg: { flex: 1, backgroundColor: Colors.ink },
-  scrim: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(20,12,8,0.45)" },
-  scroll: {
-    flexGrow: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 20,
-  },
+  scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(20,12,8,0.45)" },
+  scroll: { flexGrow: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: 20 },
 
   glassContainer: {
     width: "100%",
@@ -650,20 +580,8 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Colors.glassBorder,
   },
-  title: {
-    fontSize: 27,
-    fontWeight: "700",
-    color: Colors.ink,
-    textAlign: "center",
-    letterSpacing: -0.4,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: Colors.inkSoft,
-    textAlign: "center",
-    marginTop: 6,
-    marginBottom: 22,
-  },
+  title: { fontSize: 27, fontWeight: "700", color: Colors.ink, textAlign: "center", letterSpacing: -0.4 },
+  subtitle: { fontSize: 14, color: Colors.inkSoft, textAlign: "center", marginTop: 6, marginBottom: 22 },
 
   segment: {
     flexDirection: "row",
@@ -672,13 +590,7 @@ const styles = StyleSheet.create({
     padding: 4,
     marginBottom: 18,
   },
-  segmentBtn: {
-    flex: 1,
-    height: 38,
-    justifyContent: "center",
-    alignItems: "center",
-    borderRadius: 11,
-  },
+  segmentBtn: { flex: 1, height: 38, justifyContent: "center", alignItems: "center", borderRadius: 11 },
   segmentBtnActive: { backgroundColor: Colors.ink },
   segmentText: { fontSize: 14, fontWeight: "600", color: Colors.inkSoft },
   segmentTextActive: { color: Colors.gold },
@@ -697,6 +609,13 @@ const styles = StyleSheet.create({
   fieldIcon: { marginRight: 12 },
   fieldInput: { flex: 1, fontSize: 16, color: Colors.ink, height: "100%" },
 
+  consentRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, marginBottom: 6, marginTop: 2 },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, borderColor: Colors.inkMuted, justifyContent: "center", alignItems: "center", marginTop: 1, backgroundColor: "rgba(255,255,255,0.85)" },
+  checkboxOn: { backgroundColor: Colors.ink, borderColor: Colors.ink },
+  checkMark: { color: Colors.gold, fontSize: 14, fontWeight: "800", marginTop: -1 },
+  consentText: { flex: 1, fontSize: 13.5, color: Colors.inkSoft, lineHeight: 20 },
+  legalLink: { color: Colors.ink, fontWeight: "700", textDecorationLine: "underline" },
+  legalNote: { fontSize: 12.5, color: Colors.inkSoft, textAlign: "center", marginTop: 14, lineHeight: 18 },
   forgotLink: { alignSelf: "flex-end", marginBottom: 14, marginTop: 2 },
   linkText: { fontSize: 14, fontWeight: "600", color: Colors.ink },
 
@@ -710,17 +629,8 @@ const styles = StyleSheet.create({
   },
   btnText: { color: "#FFF", fontWeight: "700", fontSize: 16 },
 
-  dividerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginVertical: 16,
-    gap: 12,
-  },
-  dividerLine: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.inkMuted,
-  },
+  dividerRow: { flexDirection: "row", alignItems: "center", marginVertical: 16, gap: 12 },
+  dividerLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Colors.inkMuted },
   dividerText: { fontSize: 13, color: Colors.inkSoft },
 
   googleBtn: {
@@ -735,44 +645,11 @@ const styles = StyleSheet.create({
   googleText: { color: Colors.ink, fontWeight: "600", fontSize: 16 },
 
   /* reset modal */
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(20,12,8,0.55)",
-    justifyContent: "center",
-    padding: 20,
-  },
-  modalCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 24,
-    padding: 22,
-    width: "100%",
-    maxWidth: 420,
-    alignSelf: "center",
-  },
-  modalHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 10,
-  },
-  modalTitle: {
-    fontSize: 19,
-    fontWeight: "700",
-    color: Colors.ink,
-    letterSpacing: -0.2,
-  },
-  modalClose: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: Colors.background,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modalText: {
-    fontSize: 14,
-    color: Colors.inkSoft,
-    lineHeight: 21,
-    marginBottom: 16,
-  },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(20,12,8,0.55)", justifyContent: "center", padding: 20 },
+  modalCard: { backgroundColor: Colors.surface, borderRadius: 24, padding: 22, width: "100%", maxWidth: 420, alignSelf: "center" },
+  modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
+  modalTitle: { fontSize: 19, fontWeight: "700", color: Colors.ink, letterSpacing: -0.2 },
+  modalClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.background, justifyContent: "center", alignItems: "center" },
+  resetError: { fontSize: 13, color: Colors.danger, backgroundColor: Colors.dangerTint, borderRadius: 12, padding: 12, marginBottom: 14, lineHeight: 19 },
+  modalText: { fontSize: 14, color: Colors.inkSoft, lineHeight: 21, marginBottom: 16 },
 });

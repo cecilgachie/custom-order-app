@@ -1,11 +1,19 @@
+import { Image } from "expo-image";
+import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
+import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
+  BarChart3,
+  Camera,
   Cake,
   ChevronRight,
   LogOut,
+  FileText,
+  Package,
   ShieldCheck,
+  Trash2,
   User,
 } from "lucide-react-native";
 import {
@@ -23,23 +31,32 @@ import { useAppToast } from "../../context/ToastContext";
 import { supabase } from "../../lib/supabase";
 
 /* ------------------------------------------------------------------ */
-/* Design tokens (local, so this screen never breaks if Colors.ts      */
-/* changes). Only Colors.successGreen is read from the shared palette. */
+/* Design tokens, mapped from the shared palette in constants/Colors.ts */
 /* ------------------------------------------------------------------ */
 const theme = {
-  background: "#FAF8F5",
-  surface: "#FFFFFF",
-  ink: "#1F1612", // deep espresso
-  inkSoft: "#6B5F57",
-  inkMuted: "#A39990",
-  gold: "#B08D57",
-  goldTint: "#F5EEE2",
-  hairline: "#ECE6DD",
-  success: Colors?.successGreen || "#2E7D32",
-  successTint: "#E8F3E9",
-  danger: "#B42318",
-  dangerTint: "#FDF1EF",
-  dangerBorder: "#F3D3CE",
+  background: Colors.background,
+  surface: Colors.surface,
+  ink: Colors.ink,
+  inkSoft: Colors.inkSoft,
+  inkMuted: Colors.inkMuted,
+  gold: Colors.gold,
+  goldTint: Colors.goldTint,
+  hairline: Colors.hairline,
+  success: Colors.successGreen,
+  successTint: Colors.successTint,
+  danger: Colors.danger,
+  dangerTint: Colors.dangerTint,
+  dangerBorder: Colors.dangerBorder,
+};
+
+const AVATAR_BUCKET = "avatars";
+
+/** avatar_url stores the file path. Photos are private, so we show them through a temporary link. */
+const signAvatar = async (value?: string | null): Promise<string | null> => {
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) return value;
+  const { data } = await supabase.storage.from(AVATAR_BUCKET).createSignedUrl(value, 60 * 60);
+  return data?.signedUrl ?? null;
 };
 
 type ProfileData = {
@@ -57,9 +74,13 @@ const getInitials = (name?: string | null) => {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
+// "System_Admin" -> "System Admin", "customer" -> "Customer"
 const formatRole = (role?: string | null) => {
   if (!role) return "Customer";
-  return role.charAt(0).toUpperCase() + role.slice(1).toLowerCase();
+  return role
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
 export default function ProfileScreen() {
@@ -69,6 +90,8 @@ export default function ProfileScreen() {
   const [verified, setVerified] = useState(false);
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   // Keep latest router/toast in refs so the fetch runs once on mount
   // (prevents a refetch loop if showToast isn't memoized in the context).
@@ -102,13 +125,18 @@ export default function ProfileScreen() {
         if (!active) return;
 
         setProfile({
-          full_name: "Valued Customer",
           system_role: "Customer",
           ...(data || {}),
-          email: data?.email || user.email,
+          // The profiles table has no email column: it lives with the sign-in
+          email: user.email,
+          // Fall back to the username chosen at sign-up if the row has none yet
+          username: data?.username || user.user_metadata?.username || null,
         });
         // Real verification state from Supabase Auth, not a hardcoded label
         setVerified(Boolean(user.email_confirmed_at));
+
+        const signed = await signAvatar(data?.avatar_url);
+        if (active) setAvatarUrl(signed);
       } catch (error: any) {
         toastRef.current(error?.message || "Failed to load user credentials.");
       } finally {
@@ -153,6 +181,109 @@ export default function ProfileScreen() {
     ]);
   };
 
+  /* ---------- profile picture ---------- */
+  const pickAndUploadAvatar = async () => {
+    if (uploading) return;
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        showToast("Allow photo access in your phone settings to choose a picture.", { type: "error" });
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 1,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+
+      setUploading(true);
+
+      // Shrink to a 512 px JPEG (about 50 KB) so uploads are fast and cheap
+      const resized = await manipulateAsync(result.assets[0].uri, [{ resize: { width: 512 } }], {
+        compress: 0.8,
+        format: SaveFormat.JPEG,
+      });
+      const bytes = await (await fetch(resized.uri)).arrayBuffer();
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Please sign in again.");
+
+      // Each user can only write inside their own folder (enforced by the database)
+      const path = `${user.id}/${Date.now()}.jpg`;
+      const { error: uploadError } = await supabase.storage
+        .from(AVATAR_BUCKET)
+        .upload(path, bytes, { contentType: "image/jpeg", upsert: false });
+      if (uploadError) throw uploadError;
+
+      const { data: updated, error: updateError } = await supabase
+        .from("profiles")
+        .update({ avatar_url: path })
+        .eq("id", user.id)
+        .select("id");
+      if (updateError || !updated?.length) {
+        await supabase.storage.from(AVATAR_BUCKET).remove([path]); // do not leave an orphan file
+        throw updateError ?? new Error("Could not save your picture. Please try again.");
+      }
+
+      // Tidy up the previous picture
+      const previous = profile?.avatar_url as string | undefined;
+      if (previous && !/^https?:\/\//i.test(previous) && previous !== path) {
+        await supabase.storage.from(AVATAR_BUCKET).remove([previous]);
+      }
+
+      setProfile((p) => ({ ...(p || {}), avatar_url: path }));
+      setAvatarUrl(await signAvatar(path));
+      showToast("Profile picture updated.", { type: "success" });
+    } catch (e: any) {
+      showToast(e?.message || "Could not upload your picture. Please try again.", { type: "error" });
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeAvatar = async () => {
+    if (uploading) return;
+    setUploading(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Please sign in again.");
+
+      const previous = profile?.avatar_url as string | undefined;
+      const { data: updated, error } = await supabase.from("profiles").update({ avatar_url: null }).eq("id", user.id).select("id");
+      if (error || !updated?.length) throw error ?? new Error("Could not remove your picture.");
+
+      if (previous && !/^https?:\/\//i.test(previous)) await supabase.storage.from(AVATAR_BUCKET).remove([previous]);
+      setProfile((p) => ({ ...(p || {}), avatar_url: null }));
+      setAvatarUrl(null);
+      showToast("Profile picture removed.", { type: "success" });
+    } catch (e: any) {
+      showToast(e?.message || "Could not remove your picture.", { type: "error" });
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const openAvatarMenu = () => {
+    if (uploading) return;
+    // Alert buttons do not work on web, where tapping goes straight to the picker
+    if (Platform.OS === "web" || !avatarUrl) {
+      pickAndUploadAvatar();
+      return;
+    }
+    Alert.alert("Profile picture", undefined, [
+      { text: "Choose a new photo", onPress: pickAndUploadAvatar },
+      { text: "Remove photo", style: "destructive", onPress: removeAvatar },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
+
   if (loading) {
     return (
       <View style={styles.centerContainer}>
@@ -162,8 +293,12 @@ export default function ProfileScreen() {
     );
   }
 
-  const fullName = profile?.full_name || "Valued Customer";
-  const initials = getInitials(profile?.full_name);
+  const username: string | null = profile?.username || null;
+  const hasFullName = !!profile?.full_name?.trim();
+  // Real name if they gave one, otherwise their username
+  const displayName = hasFullName ? (profile!.full_name as string) : username || "Customer";
+  const handle = hasFullName && username ? `@${username}` : "";
+  const initials = getInitials(profile?.full_name || username);
   const role = formatRole(profile?.system_role);
   const isStaff = role.toLowerCase() !== "customer";
 
@@ -175,20 +310,45 @@ export default function ProfileScreen() {
     >
       {/* 1. PROFILE SUMMARY CARD */}
       <View style={styles.profileCard}>
-        <View style={styles.avatarRing}>
-          <View style={styles.avatarCircle}>
-            {initials ? (
-              <Text style={styles.avatarInitials}>{initials}</Text>
+        <Pressable
+          onPress={openAvatarMenu}
+          disabled={uploading}
+          style={styles.avatarWrap}
+          accessibilityRole="button"
+          accessibilityLabel="Change profile picture"
+        >
+          <View style={styles.avatarRing}>
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.avatarImage} contentFit="cover" cachePolicy="memory-disk" transition={150} />
             ) : (
-              <User size={28} color={theme.gold} strokeWidth={1.75} />
+              <View style={styles.avatarCircle}>
+                {initials ? (
+                  <Text style={styles.avatarInitials}>{initials}</Text>
+                ) : (
+                  <User size={28} color={theme.gold} strokeWidth={1.75} />
+                )}
+              </View>
+            )}
+            {uploading && (
+              <View style={styles.avatarOverlay}>
+                <ActivityIndicator color="#FFF" />
+              </View>
             )}
           </View>
-        </View>
+          <View style={styles.cameraBadge}>
+            <Camera size={13} color={theme.gold} strokeWidth={2} />
+          </View>
+        </Pressable>
 
         <View style={styles.profileText}>
           <Text style={styles.profileName} numberOfLines={1}>
-            {fullName}
+            {displayName}
           </Text>
+          {!!handle && (
+            <Text style={styles.profileHandle} numberOfLines={1}>
+              {handle}
+            </Text>
+          )}
           <Text style={styles.profileEmail} numberOfLines={1}>
             {profile?.email || "No email on file"}
           </Text>
@@ -227,10 +387,50 @@ export default function ProfileScreen() {
         />
         <View style={styles.separator} />
         <MenuRow
+          icon={<Package size={18} color={theme.gold} strokeWidth={1.75} />}
+          title="My Orders"
+          subtitle="Track progress and pay balances"
+          onPress={() => router.push("/(tabs)/orders")}
+        />
+        <View style={styles.separator} />
+        <MenuRow
+          icon={<BarChart3 size={18} color={theme.gold} strokeWidth={1.75} />}
+          title="My Analytics"
+          subtitle="Spending, flavors and upcoming events"
+          onPress={() => router.push("/profile/analytics")}
+        />
+        <View style={styles.separator} />
+        <MenuRow
           icon={<AlertTriangle size={18} color={theme.gold} strokeWidth={1.75} />}
           title="File a Support Complaint"
           subtitle="Tell us what went wrong"
           onPress={() => router.push("/profile/file-complaint")}
+        />
+      </View>
+
+      {/* PRIVACY AND ACCOUNT */}
+      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Privacy and account</Text>
+      <View style={styles.listCard}>
+        <MenuRow
+          icon={<FileText size={18} color={theme.gold} strokeWidth={1.75} />}
+          title="Privacy Policy"
+          subtitle="How we use your information"
+          onPress={() => router.push("/legal/privacy")}
+        />
+        <View style={styles.separator} />
+        <MenuRow
+          icon={<FileText size={18} color={theme.gold} strokeWidth={1.75} />}
+          title="Terms of Service"
+          subtitle="The rules for ordering"
+          onPress={() => router.push("/legal/terms")}
+        />
+        <View style={styles.separator} />
+        <MenuRow
+          icon={<Trash2 size={18} color={theme.danger} strokeWidth={1.75} />}
+          title="Delete account"
+          subtitle="Permanently remove your account"
+          danger
+          onPress={() => router.push("/profile/delete-account")}
         />
       </View>
 
@@ -270,11 +470,13 @@ function MenuRow({
   title,
   subtitle,
   onPress,
+  danger,
 }: {
   icon: React.ReactNode;
   title: string;
   subtitle?: string;
   onPress: () => void;
+  danger?: boolean;
 }) {
   return (
     <Pressable
@@ -286,7 +488,7 @@ function MenuRow({
     >
       <View style={styles.iconTile}>{icon}</View>
       <View style={styles.menuTextWrap}>
-        <Text style={styles.menuTitle}>{title}</Text>
+        <Text style={[styles.menuTitle, danger && { color: theme.danger }]}>{title}</Text>
         {!!subtitle && <Text style={styles.menuSubtitle}>{subtitle}</Text>}
       </View>
       <ChevronRight size={18} color={theme.inkMuted} strokeWidth={1.75} />
@@ -335,8 +537,32 @@ const styles = StyleSheet.create({
     borderColor: theme.gold,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 16,
   },
+  avatarWrap: { marginRight: 16 },
+  avatarImage: { width: 64, height: 64, borderRadius: 32, backgroundColor: theme.goldTint },
+  avatarOverlay: {
+    position: "absolute",
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "rgba(20,12,8,0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cameraBadge: {
+    position: "absolute",
+    right: -2,
+    bottom: -2,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: theme.ink,
+    borderWidth: 2,
+    borderColor: theme.surface,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  profileHandle: { fontSize: 14, fontWeight: "600", color: theme.gold, marginTop: 2 },
   avatarCircle: {
     width: 64,
     height: 64,

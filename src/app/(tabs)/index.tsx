@@ -1,4 +1,5 @@
 import { BlurView } from "expo-blur";
+import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -21,7 +22,6 @@ import {
   Animated,
   Dimensions,
   FlatList,
-  Image,
   ImageSourcePropType,
   Modal,
   Pressable,
@@ -127,8 +127,17 @@ const getLocalImage = (item: CakeItem): ImageSourcePropType | null =>
   localCakeImages[slugify(item.title)] ||
   null;
 
-const isRemoteUrl = (url?: string | null): url is string =>
-  !!url && /^https?:\/\//i.test(url.trim());
+/**
+ * image_url can be a full web address, or just a file name in the public
+ * "cake-images" Supabase Storage bucket (e.g. "chocolate-drip.jpg").
+ * Typing only the file name is easier and avoids copy-paste mistakes.
+ */
+const resolveImageUrl = (value?: string | null): string | null => {
+  const v = value?.trim();
+  if (!v) return null;
+  if (/^https?:\/\//i.test(v)) return v;
+  return supabase.storage.from("cake-images").getPublicUrl(v.replace(/^\/+/, "")).data.publicUrl;
+};
 
 function CakeImage({
   item,
@@ -139,7 +148,7 @@ function CakeImage({
   style: StyleProp<ImageStyle>;
   resizeMode?: "cover" | "contain";
 }) {
-  const remote = isRemoteUrl(item.image_url) ? item.image_url.trim() : null;
+  const remote = resolveImageUrl(item.image_url);
   const [remoteFailed, setRemoteFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -166,9 +175,11 @@ function CakeImage({
   return (
     <View style={[style as any, { overflow: "hidden" }]}>
       <Image
-        source={source}
+        source={source as any}
         style={StyleSheet.absoluteFill}
-        resizeMode={resizeMode}
+        contentFit={resizeMode}
+        cachePolicy="memory-disk"
+        transition={200}
         onLoad={() => setLoaded(true)}
         onError={() => setRemoteFailed(true)}
       />
@@ -252,7 +263,14 @@ export default function HomeScreen() {
   const loadCatalog = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const { data, error } = await supabase.from("cake_catalog").select("*");
+      let { data, error } = await supabase
+        .from("cake_catalog")
+        .select("*")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("title", { ascending: true });
+      // Before the catalog migration has run, those columns do not exist: fall back to a plain read
+      if (error) ({ data, error } = await supabase.from("cake_catalog").select("*"));
       if (error) throw error;
       setCatalog((data as CakeItem[]) || []);
     } catch {
@@ -274,9 +292,9 @@ export default function HomeScreen() {
       const cat = selectedCategory.toLowerCase();
       result = result.filter(
         (item) =>
-          item.category?.toLowerCase() === cat ||
-          item.description?.toLowerCase().includes(cat) ||
-          item.title?.toLowerCase().includes(cat)
+          item.category
+            ? item.category.toLowerCase() === cat
+            : item.description?.toLowerCase().includes(cat) || item.title?.toLowerCase().includes(cat)
       );
     }
     const q = searchQuery.trim().toLowerCase();
@@ -427,6 +445,11 @@ export default function HomeScreen() {
             <Text style={styles.cakeTitle} numberOfLines={1}>
               {item.title}
             </Text>
+            {!!item.description && (
+              <Text style={styles.descText} numberOfLines={2}>
+                {item.description}
+              </Text>
+            )}
             <Text style={styles.flavorText} numberOfLines={1}>
               {item.base_flavor || "Classic"}, {DEFAULT_ORDER_WEIGHT_KG} kg
             </Text>
@@ -824,7 +847,7 @@ const styles = StyleSheet.create({
   /* grid */
   gridContainer: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 },
   card: {
-    width: colWidth, height: 264, borderRadius: 20, overflow: "hidden", marginBottom: 12,
+    width: colWidth, height: 292, borderRadius: 20, overflow: "hidden", marginBottom: 12,
     backgroundColor: theme.goldTint,
     shadowColor: "#2A1B10", shadowOpacity: 0.1, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 3,
   },
@@ -837,7 +860,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 11, backgroundColor: "rgba(255,255,255,0.55)", overflow: "hidden",
   },
   cakeTitle: { fontSize: 14.5, fontWeight: "700", color: theme.ink },
-  flavorText: { fontSize: 12, color: theme.inkSoft, marginTop: 1 },
+  descText: { fontSize: 11.5, lineHeight: 15, color: theme.inkSoft, marginTop: 2 },
+  flavorText: { fontSize: 12, color: theme.inkSoft, marginTop: 3 },
   priceValue: { fontSize: 13.5, fontWeight: "700", color: theme.ink, marginTop: 5 },
   quickAdd: {
     width: 38, height: 38, borderRadius: 19, backgroundColor: theme.ink,

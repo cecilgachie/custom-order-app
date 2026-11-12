@@ -54,7 +54,7 @@ const theme = {
 type CakeSize = "Small" | "Medium" | "Large";
 
 const SIZE_MULTIPLIERS: Record<CakeSize, number> = { Small: 0.8, Medium: 1.0, Large: 1.4 };
-const BASE_PRICE_PER_KG = 2200; // KES
+const BASE_PRICE_PER_KG = 1100; // KES
 const MIN_WEIGHT_KG = 1.0;
 const MAX_WEIGHT_KG = 20;
 const WEIGHT_STEP = 0.5;

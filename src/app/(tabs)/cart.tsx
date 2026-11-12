@@ -1,39 +1,24 @@
 import { BlurView } from "expo-blur";
 import { useFocusEffect, useRouter } from "expo-router";
-import {
-  ChevronRight,
-  ShoppingBag,
-  Smartphone,
-  Trash2,
-  X,
-} from "lucide-react-native";
+import { Check, ChevronRight, ShoppingBag, Smartphone, Trash2 } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Animated,
-  Dimensions,
   FlatList,
-  KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import MpesaPaySheet from "../../components/MpesaPaySheet";
 import { Colors } from "../../constants/Colors";
 import { useAppToast } from "../../context/ToastContext";
+import { requestStkPush, waitForPayment } from "../../lib/mpesa";
 import { supabase } from "../../lib/supabase";
-
-/* ------------------------------------------------------------------ */
-/* Tokens + constants                                                  */
-/* ------------------------------------------------------------------ */
-const { height } = Dimensions.get("window");
-const SHEET_HEIGHT = Math.min(440, Math.round(height * 0.62));
 
 const theme = {
   background: Colors.background,
@@ -44,15 +29,9 @@ const theme = {
   gold: Colors.gold,
   goldTint: Colors.goldTint,
   hairline: Colors.hairline,
-  success: Colors.successGreen,
-  successTint: Colors.successTint,
   danger: Colors.danger,
   dangerTint: Colors.dangerTint,
-  dangerBorder: Colors.dangerBorder,
 };
-
-/** Name of the Supabase Edge Function that triggers the Daraja STK push. */
-const MPESA_FUNCTION = "mpesa-stk-push";
 
 type PaymentType = "Full" | "Deposit";
 
@@ -69,36 +48,21 @@ type CartItem = {
 };
 
 /* ------------------------------------------------------------------ */
-/* Money helpers (deposit rounds up so every amount is a whole KES,    */
-/* which is what M-Pesa requires)                                      */
+/* Money helpers (deposit rounds up so every amount is whole KES)      */
 /* ------------------------------------------------------------------ */
 const formatKes = (n: number) => `KES ${Math.round(n).toLocaleString()}`;
 const priceOf = (item: CartItem) => Number(item.total_price) || 0;
-const dueNowOf = (item: CartItem) =>
-  item.payment_type === "Deposit"
-    ? Math.ceil(priceOf(item) / 2)
-    : priceOf(item);
-
-/** Accepts 07XX, 01XX, +2547XX, 2547XX and returns 2547XXXXXXXX, or null. */
-const normalizeKenyanPhone = (raw: string): string | null => {
-  const digits = raw.replace(/[^\d]/g, "");
-  let msisdn = digits;
-  if (digits.startsWith("0")) msisdn = `254${digits.slice(1)}`;
-  else if (digits.startsWith("7") || digits.startsWith("1"))
-    msisdn = `254${digits}`;
-  return /^254(7|1)\d{8}$/.test(msisdn) ? msisdn : null;
+const dueNowOf = (item: CartItem) => (item.payment_type === "Deposit" ? Math.ceil(priceOf(item) / 2) : priceOf(item));
+const totalsOf = (items: CartItem[]) => {
+  const gross = items.reduce((s, i) => s + priceOf(i), 0);
+  const now = items.reduce((s, i) => s + dueNowOf(i), 0);
+  return { gross, now, later: gross - now };
 };
 
-const confirmAction = (
-  title: string,
-  message: string,
-  confirmLabel: string,
-  onConfirm: () => void,
-) => {
+const confirmAction = (title: string, message: string, confirmLabel: string, onConfirm: () => void) => {
   if (Platform.OS === "web") {
     // eslint-disable-next-line no-alert
-    if (typeof window !== "undefined" && window.confirm(`${title}\n${message}`))
-      onConfirm();
+    if (typeof window !== "undefined" && window.confirm(`${title}\n${message}`)) onConfirm();
     return;
   }
   Alert.alert(title, message, [
@@ -122,14 +86,22 @@ export default function CartScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
-  const [footerHeight, setFooterHeight] = useState(240);
+  const [footerHeight, setFooterHeight] = useState(220);
 
-  // Checkout sheet
-  const [sheetVisible, setSheetVisible] = useState(false);
-  const [phone, setPhone] = useState("");
-  const [phoneError, setPhoneError] = useState<string | null>(null);
-  const [processing, setProcessing] = useState(false);
-  const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
+  // Which cakes the customer has UNticked. New cakes start ticked.
+  const [unselected, setUnselected] = useState<Set<string>>(new Set());
+  // Cakes with an M-Pesa prompt in flight (waiting for the customer's PIN)
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  // Cakes in the open checkout sheet (one cake, or all ticked cakes)
+  const [checkoutIds, setCheckoutIds] = useState<string[] | null>(null);
+
+  const token = useRef({ cancelled: false });
+  useEffect(() => {
+    token.current.cancelled = false;
+    return () => {
+      token.current.cancelled = true;
+    };
+  }, []);
 
   /* ---------- data ---------- */
   const fetchCartItems = useCallback(
@@ -162,166 +134,134 @@ export default function CartScreen() {
         setLoading(false);
         setRefreshing(false);
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
   );
 
-  // Tabs stay mounted, so refetch every time the cart tab gains focus.
-  // This is what makes cakes added from Home show up here immediately.
+  // Tabs stay mounted, so refetch every time the cart gains focus
   useFocusEffect(
     useCallback(() => {
       fetchCartItems("silent");
-    }, [fetchCartItems]),
+    }, [fetchCartItems])
   );
+
+  /* ---------- selection ---------- */
+  const payable = useMemo(() => cartItems.filter((i) => !pendingIds.has(String(i.id))), [cartItems, pendingIds]);
+  const selectedItems = useMemo(() => payable.filter((i) => !unselected.has(String(i.id))), [payable, unselected]);
+  const allSelected = payable.length > 0 && selectedItems.length === payable.length;
+
+  const toggleSelected = (id: string) =>
+    setUnselected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const toggleAll = () => setUnselected(allSelected ? new Set(payable.map((i) => String(i.id))) : new Set());
 
   /* ---------- row actions ---------- */
   const removeCartItem = (item: CartItem) => {
-    confirmAction(
-      "Remove cake",
-      `Remove "${item.cake_title}" from your cart?`,
-      "Remove",
-      async () => {
-        const id = String(item.id);
-        setRemovingId(id);
-        try {
-          const { error } = await supabase
-            .from("cake_orders")
-            .delete()
-            .eq("id", item.id);
-          if (error) throw error;
-          setCartItems((prev) => prev.filter((i) => String(i.id) !== id));
-          showToast("Item removed from cart 🎂");
-        } catch (error: any) {
-          showToast(error?.message || "Could not remove this item.");
-        } finally {
-          setRemovingId(null);
+    confirmAction("Remove cake", `Remove "${item.cake_title}" from your cart?`, "Remove", async () => {
+      const id = String(item.id);
+      setRemovingId(id);
+      try {
+        // .select() returns the deleted rows. Row-level security can reject a
+        // delete WITHOUT an error, so an empty result means nothing was removed.
+        const { data, error } = await supabase.from("cake_orders").delete().eq("id", item.id).select("id");
+        if (error) throw error;
+        if (!data || data.length === 0) {
+          console.warn("Cart delete removed 0 rows. Run the cart permissions SQL (20261105000000_cart_policies.sql).");
+          throw new Error("This cake could not be removed. Please try again or contact support.");
         }
-      },
-    );
+        setCartItems((prev) => prev.filter((i) => String(i.id) !== id));
+        showToast("Cake removed from your cart.", { type: "success" });
+      } catch (error: any) {
+        showToast(error?.message || "Could not remove this cake.", { type: "error" });
+      } finally {
+        setRemovingId(null);
+      }
+    });
   };
 
-  // Optimistic update with rollback if the write fails
+  // Optimistic update, rolled back if the database did not really change
   const setPaymentType = async (item: CartItem, next: PaymentType) => {
-    if (item.payment_type === next || updatingId || processing) return;
+    if (item.payment_type === next || updatingId) return;
     const id = String(item.id);
     const previous = item.payment_type;
 
     setUpdatingId(id);
-    setCartItems((prev) =>
-      prev.map((i) => (String(i.id) === id ? { ...i, payment_type: next } : i)),
-    );
+    setCartItems((prev) => prev.map((i) => (String(i.id) === id ? { ...i, payment_type: next } : i)));
     try {
-      const { error } = await supabase
-        .from("cake_orders")
-        .update({ payment_type: next })
-        .eq("id", item.id);
+      const { data, error } = await supabase.from("cake_orders").update({ payment_type: next }).eq("id", item.id).select("id");
       if (error) throw error;
+      if (!data || data.length === 0) {
+        console.warn("Cart update changed 0 rows. Run the cart permissions SQL (20261105000000_cart_policies.sql).");
+        throw new Error("Could not update the payment option. Please try again.");
+      }
     } catch (error: any) {
-      setCartItems((prev) =>
-        prev.map((i) =>
-          String(i.id) === id ? { ...i, payment_type: previous } : i,
-        ),
-      );
-      showToast(error?.message || "Could not update payment option.");
+      setCartItems((prev) => prev.map((i) => (String(i.id) === id ? { ...i, payment_type: previous } : i)));
+      showToast(error?.message || "Could not update payment option.", { type: "error" });
     } finally {
       setUpdatingId(null);
     }
   };
 
   /* ---------- totals ---------- */
-  const { totalGross, totalDueNow, balanceLater } = useMemo(() => {
-    const gross = cartItems.reduce((sum, i) => sum + priceOf(i), 0);
-    const now = cartItems.reduce((sum, i) => sum + dueNowOf(i), 0);
-    return { totalGross: gross, totalDueNow: now, balanceLater: gross - now };
-  }, [cartItems]);
+  const selectedTotals = useMemo(() => totalsOf(selectedItems), [selectedItems]);
 
-  /* ---------- checkout sheet ---------- */
-  useEffect(() => {
-    if (sheetVisible) {
-      translateY.setValue(SHEET_HEIGHT);
-      Animated.spring(translateY, {
-        toValue: 0,
-        damping: 22,
-        stiffness: 180,
-        mass: 0.9,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [sheetVisible, translateY]);
-
-  const openCheckout = () => {
-    if (cartItems.length === 0 || updatingId) return;
-    setPhoneError(null);
-    setSheetVisible(true);
+  /* ---------- checkout ---------- */
+  const openCheckout = (ids: string[]) => {
+    if (ids.length === 0 || updatingId) return;
+    setCheckoutIds(ids);
   };
 
-  const closeCheckout = useCallback(() => {
-    if (processing) return;
-    Animated.timing(translateY, {
-      toValue: SHEET_HEIGHT,
-      duration: 200,
-      useNativeDriver: true,
-    }).start(() => setSheetVisible(false));
-  }, [processing, translateY]);
+  const checkoutItems = useMemo(
+    () => (checkoutIds ? cartItems.filter((i) => checkoutIds.includes(String(i.id))) : []),
+    [cartItems, checkoutIds]
+  );
+  const checkoutTotals = useMemo(() => totalsOf(checkoutItems), [checkoutItems]);
 
-  const backdropOpacity = translateY.interpolate({
-    inputRange: [0, SHEET_HEIGHT],
-    outputRange: [1, 0],
-    extrapolate: "clamp",
-  });
+  const trackPayment = async (paymentId: string, ids: string[]) => {
+    const outcome = await waitForPayment(paymentId, { token: token.current });
+    if (token.current.cancelled) return;
 
-  const handlePay = async () => {
-    if (processing) return;
+    setPendingIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    await fetchCartItems("silent");
 
-    const msisdn = normalizeKenyanPhone(phone);
-    if (!msisdn) {
-      setPhoneError("Enter a valid Safaricom number, e.g. 0712 345 678.");
-      return;
+    if (!outcome) {
+      showToast("Still waiting for M-Pesa. If you were charged, pull down to refresh in a minute.", { type: "info" });
+    } else if (outcome.status === "Success") {
+      router.push({ pathname: "/receipt", params: { paymentId } });
+    } else if (outcome.status === "Cancelled") {
+      showToast("Payment was cancelled. Nothing was charged.", { type: "info" });
+    } else if (outcome.status === "Mismatch") {
+      showToast("We received a payment with an unexpected amount. Our team will contact you.", { type: "error" });
+    } else {
+      showToast(outcome.result_desc || "The payment did not go through.", { type: "error" });
     }
-    setPhoneError(null);
-    setProcessing(true);
+  };
 
-    try {
-      // The server must recompute the amount from these order ids.
-      // Never trust a client-sent amount for a real charge.
-      const { data, error } = await supabase.functions.invoke(MPESA_FUNCTION, {
-        body: {
-          phone: msisdn,
-          amount: totalDueNow,
-          order_ids: cartItems.map((i) => i.id),
-        },
-      });
+  const submitPayment = async (msisdn: string) => {
+    const items = checkoutItems;
+    if (items.length === 0) throw new Error("Those cakes are no longer in your cart. Pull down to refresh.");
 
-      if (error) {
-        let message = error.message || "Could not start the M-Pesa request.";
-        try {
-          const payload = await (error as any).context?.json?.();
-          if (payload?.error) message = payload.error;
-        } catch {
-          // fall back to the generic error message above
-        }
-        throw new Error(message);
-      }
+    const ids = items.map((i) => String(i.id));
+    const { paymentId } = await requestStkPush({
+      phone: msisdn,
+      orderIds: items.map((i) => i.id),
+      amount: checkoutTotals.now,
+      purpose: "Checkout",
+    });
 
-      if (data?.error) throw new Error(data.error);
-
-      setProcessing(false);
-      Animated.timing(translateY, {
-        toValue: SHEET_HEIGHT,
-        duration: 200,
-        useNativeDriver: true,
-      }).start(() => setSheetVisible(false));
-      showToast(
-        "Check your phone and enter your M-Pesa PIN to complete payment 📱",
-      );
-    } catch (error: any) {
-      setProcessing(false);
-      showToast(
-        error?.message ||
-          "Could not start the M-Pesa request. Please try again.",
-      );
-    }
+    setCheckoutIds(null);
+    setPendingIds((prev) => new Set([...prev, ...ids]));
+    showToast("Check your phone and enter your M-Pesa PIN 📱", { type: "info" });
+    trackPayment(paymentId, ids); // runs in the background, not awaited
   };
 
   /* ---------- render ---------- */
@@ -335,99 +275,118 @@ export default function CartScreen() {
   }
 
   const count = cartItems.length;
+  const selectedCount = selectedItems.length;
 
   const renderItem = ({ item }: { item: CartItem }) => {
     const id = String(item.id);
     const isRemoving = removingId === id;
     const isUpdating = updatingId === id;
+    const isPending = pendingIds.has(id);
+    const isSelected = !isPending && !unselected.has(id);
     const isDeposit = item.payment_type === "Deposit";
-    const specs = [
-      item.flavor,
-      item.cake_size ? `${item.cake_size} size` : null,
-      item.total_weight_kg ? `${item.total_weight_kg} kg` : null,
-    ]
+    const specs = [item.flavor, item.cake_size ? `${item.cake_size} size` : null, item.total_weight_kg ? `${item.total_weight_kg} kg` : null]
       .filter(Boolean)
       .join(", ");
 
     return (
-      <View style={[styles.itemCard, isRemoving && { opacity: 0.5 }]}>
+      <View style={[styles.itemCard, isRemoving && { opacity: 0.5 }, isSelected && styles.itemCardSelected]}>
         <View style={styles.cardHeaderRow}>
-          <View style={{ flex: 1, paddingRight: 12 }}>
+          <Pressable
+            onPress={() => toggleSelected(id)}
+            disabled={isPending}
+            hitSlop={8}
+            style={[styles.checkbox, isSelected && styles.checkboxOn, isPending && { opacity: 0.4 }]}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: isSelected, disabled: isPending }}
+            accessibilityLabel={`Include ${item.cake_title} in payment`}
+          >
+            {isSelected && <Check size={15} color={theme.gold} strokeWidth={3} />}
+          </Pressable>
+
+          <View style={{ flex: 1, paddingHorizontal: 12 }}>
             <Text style={styles.cakeTitle} numberOfLines={1}>
               {item.cake_title}
             </Text>
             {!!specs && <Text style={styles.cakeSpecs}>{specs}</Text>}
           </View>
+
           <Pressable
             onPress={() => removeCartItem(item)}
-            disabled={isRemoving}
+            disabled={isRemoving || isPending}
             hitSlop={10}
-            style={({ pressed }) => [
-              styles.trashBtn,
-              pressed && { backgroundColor: theme.dangerTint },
-            ]}
+            style={({ pressed }) => [styles.trashBtn, pressed && { backgroundColor: theme.dangerTint }, isPending && { opacity: 0.4 }]}
             accessibilityRole="button"
             accessibilityLabel={`Remove ${item.cake_title}`}
           >
-            {isRemoving ? (
-              <ActivityIndicator size="small" color={theme.danger} />
-            ) : (
-              <Trash2 size={17} color={theme.danger} strokeWidth={1.75} />
-            )}
+            {isRemoving ? <ActivityIndicator size="small" color={theme.danger} /> : <Trash2 size={17} color={theme.danger} strokeWidth={1.75} />}
           </Pressable>
         </View>
 
         {!!item.cake_message && (
           <View style={styles.msgBubble}>
-            <Text style={styles.msgText}>
-              Inscription: “{item.cake_message}”
-            </Text>
+            <Text style={styles.msgText}>Inscription: “{item.cake_message}”</Text>
           </View>
         )}
 
         <View style={styles.billingRow}>
           <View>
-            <Text style={styles.priceLabel}>
-              {isDeposit ? "Pay now (50%)" : "Pay now"}
-            </Text>
+            <Text style={styles.priceLabel}>{isDeposit ? "Pay now (50%)" : "Pay now"}</Text>
             <Text style={styles.priceAmount}>{formatKes(dueNowOf(item))}</Text>
-            <Text style={styles.priceSub}>
-              {isDeposit
-                ? `of ${formatKes(priceOf(item))} total`
-                : "Full amount"}
-            </Text>
+            <Text style={styles.priceSub}>{isDeposit ? `of ${formatKes(priceOf(item))} total` : "Full amount"}</Text>
           </View>
 
-          <View style={[styles.segment, isUpdating && { opacity: 0.6 }]}>
+          <View style={[styles.segment, (isUpdating || isPending) && { opacity: 0.6 }]}>
             {(["Full", "Deposit"] as PaymentType[]).map((type) => {
               const active = item.payment_type === type;
               return (
                 <Pressable
                   key={type}
                   onPress={() => setPaymentType(item, type)}
+                  disabled={isPending}
                   style={[styles.segmentBtn, active && styles.segmentBtnActive]}
                   accessibilityRole="button"
                   accessibilityState={{ selected: active }}
-                  accessibilityLabel={
-                    type === "Full" ? "Pay in full" : "Pay 50 percent deposit"
-                  }
+                  accessibilityLabel={type === "Full" ? "Pay in full" : "Pay 50 percent deposit"}
                 >
-                  <Text
-                    style={[
-                      styles.segmentText,
-                      active && styles.segmentTextActive,
-                    ]}
-                  >
-                    {type === "Full" ? "Full" : "50% deposit"}
-                  </Text>
+                  <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{type === "Full" ? "Full" : "50% deposit"}</Text>
                 </Pressable>
               );
             })}
           </View>
         </View>
+
+        {/* Pay for just this cake */}
+        {isPending ? (
+          <View style={styles.pendingRow}>
+            <ActivityIndicator size="small" color={theme.gold} />
+            <Text style={styles.pendingText}>Waiting for M-Pesa. Enter your PIN on your phone.</Text>
+          </View>
+        ) : (
+          <Pressable
+            onPress={() => openCheckout([id])}
+            disabled={!!updatingId}
+            style={({ pressed }) => [styles.payOneBtn, pressed && { backgroundColor: theme.goldTint }, !!updatingId && { opacity: 0.5 }]}
+            accessibilityRole="button"
+            accessibilityLabel={`Pay for ${item.cake_title} only`}
+          >
+            <Smartphone size={16} color={theme.ink} strokeWidth={1.75} />
+            <Text style={styles.payOneText}>Pay {formatKes(dueNowOf(item))} for this cake</Text>
+          </Pressable>
+        )}
       </View>
     );
   };
+
+  const header =
+    payable.length > 1 ? (
+      <Pressable onPress={toggleAll} style={styles.selectAllRow} accessibilityRole="checkbox" accessibilityState={{ checked: allSelected }}>
+        <View style={[styles.checkbox, allSelected && styles.checkboxOn]}>{allSelected && <Check size={15} color={theme.gold} strokeWidth={3} />}</View>
+        <Text style={styles.selectAllText}>{allSelected ? "Deselect all" : "Select all"}</Text>
+        <Text style={styles.selectAllCount}>
+          {selectedCount} of {payable.length} selected
+        </Text>
+      </Pressable>
+    ) : null;
 
   return (
     <View style={styles.container}>
@@ -435,9 +394,7 @@ export default function CartScreen() {
       <View style={[styles.header, { paddingTop: insets.top + 20 }]}>
         <Text style={styles.headerTitle}>My Cart</Text>
         <Text style={styles.headerSubtitle}>
-          {count === 0
-            ? "Nothing here yet"
-            : `${count} ${count === 1 ? "cake" : "cakes"} ready to order`}
+          {count === 0 ? "Nothing here yet" : `${count} ${count === 1 ? "cake" : "cakes"} in your cart. Pay for one or several.`}
         </Text>
       </View>
 
@@ -446,192 +403,76 @@ export default function CartScreen() {
         data={cartItems}
         keyExtractor={(item) => String(item.id)}
         renderItem={renderItem}
+        ListHeaderComponent={header}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.listContainer,
-          { paddingBottom: count > 0 ? footerHeight + 24 : 40 },
-        ]}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => fetchCartItems("refresh")}
-            tintColor={theme.gold}
-            colors={[theme.gold]}
-          />
-        }
+        contentContainerStyle={[styles.listContainer, { paddingBottom: count > 0 ? footerHeight + 24 : 40 }]}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => fetchCartItems("refresh")} tintColor={theme.gold} colors={[theme.gold]} />}
         ListEmptyComponent={
           <View style={styles.emptyView}>
             <View style={styles.emptyIcon}>
               <ShoppingBag size={34} color={theme.gold} strokeWidth={1.5} />
             </View>
             <Text style={styles.emptyTitle}>Your cart is empty</Text>
-            <Text style={styles.emptyText}>
-              Pick a cake from the catalog and it will appear here.
-            </Text>
-            <Pressable
-              style={({ pressed }) => [
-                styles.browseBtn,
-                pressed && { opacity: 0.85 },
-              ]}
-              onPress={() => router.replace("/(tabs)")}
-              accessibilityRole="button"
-            >
+            <Text style={styles.emptyText}>Pick a cake from the catalog and it will appear here.</Text>
+            <Pressable style={({ pressed }) => [styles.browseBtn, pressed && { opacity: 0.85 }]} onPress={() => router.replace("/(tabs)")} accessibilityRole="button">
               <Text style={styles.browseBtnText}>Browse cakes</Text>
             </Pressable>
           </View>
         }
       />
 
-      {/* FOOTER SUMMARY */}
+      {/* FOOTER SUMMARY (for the ticked cakes) */}
       {count > 0 && (
-        <BlurView
-          intensity={80}
-          tint="light"
-          style={styles.checkoutFooter}
-          onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
-        >
+        <BlurView intensity={80} tint="light" style={styles.checkoutFooter} onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}>
           <View style={styles.summaryLine}>
-            <Text style={styles.summaryLabel}>Order total</Text>
-            <Text style={styles.summaryValue}>{formatKes(totalGross)}</Text>
+            <Text style={styles.summaryLabel}>Selected total ({selectedCount})</Text>
+            <Text style={styles.summaryValue}>{formatKes(selectedTotals.gross)}</Text>
           </View>
 
-          {balanceLater > 0 && (
+          {selectedTotals.later > 0 && (
             <View style={styles.summaryLine}>
               <Text style={styles.summaryLabel}>Balance due at delivery</Text>
-              <Text style={styles.summaryValue}>{formatKes(balanceLater)}</Text>
+              <Text style={styles.summaryValue}>{formatKes(selectedTotals.later)}</Text>
             </View>
           )}
 
           <View style={[styles.summaryLine, styles.totalDueLine]}>
             <Text style={styles.totalDueLabel}>Due now</Text>
-            <Text style={styles.totalDueValue}>{formatKes(totalDueNow)}</Text>
+            <Text style={styles.totalDueValue}>{formatKes(selectedTotals.now)}</Text>
           </View>
 
           <Pressable
             style={({ pressed }) => [
               styles.checkoutBtn,
               pressed && { opacity: 0.9, transform: [{ scale: 0.985 }] },
-              !!updatingId && { opacity: 0.6 },
+              (selectedCount === 0 || !!updatingId) && { opacity: 0.5 },
             ]}
-            onPress={openCheckout}
-            disabled={!!updatingId}
+            onPress={() => openCheckout(selectedItems.map((i) => String(i.id)))}
+            disabled={selectedCount === 0 || !!updatingId}
             accessibilityRole="button"
-            accessibilityLabel={`Checkout, ${formatKes(totalDueNow)} due now`}
+            accessibilityLabel={`Pay for ${selectedCount} selected cakes, ${formatKes(selectedTotals.now)} due now`}
           >
             <Smartphone size={19} color={theme.gold} strokeWidth={1.9} />
-            <Text style={styles.checkoutBtnText}>Pay with M-Pesa</Text>
-            <ChevronRight
-              size={18}
-              color="#FFF"
-              style={{ marginLeft: "auto" }}
-            />
+            <Text style={styles.checkoutBtnText}>
+              {selectedCount === 0 ? "Select a cake to pay" : `Pay ${selectedCount} ${selectedCount === 1 ? "cake" : "cakes"} with M-Pesa`}
+            </Text>
+            {selectedCount > 0 && <ChevronRight size={18} color="#FFF" style={{ marginLeft: "auto" }} />}
           </Pressable>
         </BlurView>
       )}
 
-      {/* M-PESA CHECKOUT SHEET */}
-      <Modal
-        visible={sheetVisible}
-        transparent
-        animationType="none"
-        onRequestClose={closeCheckout}
-        statusBarTranslucent
-      >
-        <KeyboardAvoidingView
-          style={{ flex: 1, justifyContent: "flex-end" }}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-        >
-          <Animated.View
-            style={[styles.sheetBackdrop, { opacity: backdropOpacity }]}
-          >
-            <Pressable
-              style={StyleSheet.absoluteFill}
-              onPress={closeCheckout}
-              accessibilityLabel="Close checkout"
-            />
-          </Animated.View>
-
-          <Animated.View
-            style={[styles.sheet, { transform: [{ translateY }] }]}
-          >
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>Pay with M-Pesa</Text>
-              <Pressable
-                onPress={closeCheckout}
-                hitSlop={10}
-                style={styles.sheetClose}
-                accessibilityLabel="Close"
-              >
-                <X size={18} color={theme.ink} />
-              </Pressable>
-            </View>
-
-            <View style={styles.amountCard}>
-              <Text style={styles.amountLabel}>Amount to pay now</Text>
-              <Text style={styles.amountValue}>{formatKes(totalDueNow)}</Text>
-              {balanceLater > 0 && (
-                <Text style={styles.amountNote}>
-                  {formatKes(balanceLater)} balance is due at delivery.
-                </Text>
-              )}
-            </View>
-
-            <Text style={styles.inputLabel}>M-Pesa phone number</Text>
-            <View
-              style={[
-                styles.phoneField,
-                !!phoneError && { borderColor: theme.danger },
-              ]}
-            >
-              <Text style={styles.phonePrefix}>+254</Text>
-              <TextInput
-                value={phone}
-                onChangeText={(t) => {
-                  setPhone(t);
-                  if (phoneError) setPhoneError(null);
-                }}
-                placeholder="712 345 678"
-                placeholderTextColor={theme.inkMuted}
-                keyboardType="phone-pad"
-                editable={!processing}
-                maxLength={16}
-                style={styles.phoneInput}
-                returnKeyType="done"
-                onSubmitEditing={handlePay}
-              />
-            </View>
-            {phoneError ? (
-              <Text style={styles.errorText}>{phoneError}</Text>
-            ) : (
-              <Text style={styles.helperText}>
-                You will get a prompt on this phone to enter your PIN.
-              </Text>
-            )}
-
-            <Pressable
-              onPress={handlePay}
-              disabled={processing}
-              style={({ pressed }) => [
-                styles.payBtn,
-                pressed && { opacity: 0.9, transform: [{ scale: 0.985 }] },
-                processing && { opacity: 0.75 },
-              ]}
-              accessibilityRole="button"
-            >
-              {processing ? (
-                <>
-                  <ActivityIndicator size="small" color="#FFF" />
-                  <Text style={styles.payBtnText}>Sending request…</Text>
-                </>
-              ) : (
-                <Text style={styles.payBtnText}>
-                  Pay {formatKes(totalDueNow)}
-                </Text>
-              )}
-            </Pressable>
-          </Animated.View>
-        </KeyboardAvoidingView>
-      </Modal>
+      <MpesaPaySheet
+        visible={checkoutIds !== null}
+        title="Pay with M-Pesa"
+        amount={checkoutTotals.now}
+        note={
+          checkoutItems.length === 1
+            ? `For ${checkoutItems[0].cake_title}${checkoutTotals.later > 0 ? `. ${formatKes(checkoutTotals.later)} balance is due at delivery.` : ""}`
+            : `For ${checkoutItems.length} cakes${checkoutTotals.later > 0 ? `. ${formatKes(checkoutTotals.later)} balance is due at delivery.` : ""}`
+        }
+        onClose={() => setCheckoutIds(null)}
+        onSubmit={submitPayment}
+      />
     </View>
   );
 }
@@ -641,263 +482,74 @@ export default function CartScreen() {
 /* ------------------------------------------------------------------ */
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
-  centerView: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: theme.background,
-  },
+  centerView: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: theme.background },
   loadingText: { marginTop: 12, color: theme.inkSoft, fontSize: 14 },
 
-  header: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 14 },
-  headerTitle: {
-    fontSize: 26,
-    fontWeight: "700",
-    color: theme.ink,
-    letterSpacing: -0.4,
-  },
+  header: { paddingHorizontal: 20, paddingBottom: 14 },
+  headerTitle: { fontSize: 26, fontWeight: "700", color: theme.ink, letterSpacing: -0.4 },
   headerSubtitle: { fontSize: 14, color: theme.inkSoft, marginTop: 3 },
 
   listContainer: { paddingHorizontal: 16, paddingTop: 4 },
 
+  selectAllRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10, paddingHorizontal: 4, marginBottom: 6 },
+  selectAllText: { fontSize: 14.5, fontWeight: "600", color: theme.ink },
+  selectAllCount: { marginLeft: "auto", fontSize: 13, color: theme.inkSoft },
+
   emptyView: { alignItems: "center", marginTop: 56, paddingHorizontal: 24 },
-  emptyIcon: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: theme.goldTint,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 18,
-  },
+  emptyIcon: { width: 76, height: 76, borderRadius: 38, backgroundColor: theme.goldTint, justifyContent: "center", alignItems: "center", marginBottom: 18 },
   emptyTitle: { fontSize: 18, fontWeight: "700", color: theme.ink },
-  emptyText: {
-    fontSize: 14,
-    color: theme.inkSoft,
-    textAlign: "center",
-    marginTop: 6,
-    lineHeight: 21,
-  },
-  browseBtn: {
-    backgroundColor: theme.ink,
-    paddingHorizontal: 24,
-    height: 48,
-    justifyContent: "center",
-    borderRadius: 14,
-    marginTop: 22,
-  },
+  emptyText: { fontSize: 14, color: theme.inkSoft, textAlign: "center", marginTop: 6, lineHeight: 21 },
+  browseBtn: { backgroundColor: theme.ink, paddingHorizontal: 24, height: 48, justifyContent: "center", borderRadius: 14, marginTop: 22 },
   browseBtnText: { color: "#FFF", fontWeight: "700", fontSize: 15 },
 
   itemCard: {
-    backgroundColor: theme.surface,
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.hairline,
-    shadowColor: "#2A1B10",
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
+    backgroundColor: theme.surface, borderRadius: 18, padding: 16, marginBottom: 14,
+    borderWidth: 1, borderColor: theme.hairline,
+    shadowColor: "#2A1B10", shadowOpacity: 0.05, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2,
   },
-  cardHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-  cakeTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: theme.ink,
-    letterSpacing: -0.2,
-  },
+  itemCardSelected: { borderColor: theme.gold },
+  cardHeaderRow: { flexDirection: "row", alignItems: "flex-start" },
+  checkbox: { width: 24, height: 24, borderRadius: 7, borderWidth: 1.5, borderColor: theme.inkMuted, justifyContent: "center", alignItems: "center", marginTop: 1 },
+  checkboxOn: { backgroundColor: theme.ink, borderColor: theme.ink },
+  cakeTitle: { fontSize: 17, fontWeight: "700", color: theme.ink, letterSpacing: -0.2 },
   cakeSpecs: { fontSize: 13, color: theme.inkSoft, marginTop: 3 },
-  trashBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  msgBubble: {
-    backgroundColor: theme.goldTint,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 12,
-    marginTop: 12,
-  },
+  trashBtn: { width: 34, height: 34, borderRadius: 17, justifyContent: "center", alignItems: "center" },
+  msgBubble: { backgroundColor: theme.goldTint, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, marginTop: 12 },
   msgText: { fontSize: 13, color: theme.inkSoft, lineHeight: 19 },
 
   billingRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.hairline,
-    paddingTop: 14,
-    marginTop: 14,
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.hairline, paddingTop: 14, marginTop: 14,
   },
   priceLabel: { fontSize: 12, color: theme.inkSoft },
-  priceAmount: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: theme.ink,
-    marginTop: 2,
-  },
+  priceAmount: { fontSize: 18, fontWeight: "700", color: theme.ink, marginTop: 2 },
   priceSub: { fontSize: 12, color: theme.inkMuted, marginTop: 2 },
 
-  segment: {
-    flexDirection: "row",
-    backgroundColor: theme.background,
-    borderRadius: 12,
-    padding: 3,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.hairline,
-  },
-  segmentBtn: {
-    paddingHorizontal: 12,
-    height: 34,
-    justifyContent: "center",
-    borderRadius: 9,
-  },
+  segment: { flexDirection: "row", backgroundColor: theme.background, borderRadius: 12, padding: 3, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.hairline },
+  segmentBtn: { paddingHorizontal: 12, height: 34, justifyContent: "center", borderRadius: 9 },
   segmentBtnActive: { backgroundColor: theme.ink },
   segmentText: { fontSize: 12.5, fontWeight: "600", color: theme.inkSoft },
   segmentTextActive: { color: theme.gold },
 
+  payOneBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 46, borderRadius: 14,
+    borderWidth: 1, borderColor: theme.hairline, marginTop: 14,
+  },
+  payOneText: { fontSize: 14.5, fontWeight: "600", color: theme.ink },
+  pendingRow: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: theme.goldTint, borderRadius: 12, padding: 12, marginTop: 14 },
+  pendingText: { flex: 1, fontSize: 13, color: theme.inkSoft, lineHeight: 19 },
+
   checkoutFooter: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 20,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.hairline,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    overflow: "hidden",
-    backgroundColor: "rgba(250,248,245,0.75)",
+    position: "absolute", bottom: 0, left: 0, right: 0, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 20,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.hairline, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    overflow: "hidden", backgroundColor: "rgba(250,248,245,0.75)",
   },
-  summaryLine: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 8,
-  },
+  summaryLine: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
   summaryLabel: { color: theme.inkSoft, fontSize: 14 },
   summaryValue: { fontWeight: "600", fontSize: 14, color: theme.ink },
-  totalDueLine: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.hairline,
-    paddingTop: 12,
-    marginTop: 4,
-    marginBottom: 14,
-    alignItems: "baseline",
-  },
+  totalDueLine: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.hairline, paddingTop: 12, marginTop: 4, marginBottom: 14, alignItems: "baseline" },
   totalDueLabel: { fontWeight: "700", fontSize: 15, color: theme.ink },
-  totalDueValue: {
-    fontWeight: "800",
-    fontSize: 21,
-    color: theme.ink,
-    letterSpacing: -0.3,
-  },
-  checkoutBtn: {
-    backgroundColor: theme.ink,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: 18,
-    height: 54,
-    borderRadius: 16,
-  },
+  totalDueValue: { fontWeight: "800", fontSize: 21, color: theme.ink, letterSpacing: -0.3 },
+  checkoutBtn: { backgroundColor: theme.ink, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 18, height: 54, borderRadius: 16 },
   checkoutBtnText: { color: "#FFF", fontWeight: "700", fontSize: 16 },
-
-  /* sheet */
-  sheetBackdrop: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(20,12,8,0.55)",
-  },
-  sheet: {
-    backgroundColor: theme.surface,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 32,
-  },
-  sheetHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 18,
-  },
-  sheetTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: theme.ink,
-    letterSpacing: -0.3,
-  },
-  sheetClose: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: theme.background,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  amountCard: {
-    backgroundColor: theme.goldTint,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 20,
-  },
-  amountLabel: { fontSize: 13, color: theme.inkSoft },
-  amountValue: {
-    fontSize: 28,
-    fontWeight: "800",
-    color: theme.ink,
-    marginTop: 4,
-    letterSpacing: -0.5,
-  },
-  amountNote: { fontSize: 12.5, color: theme.inkSoft, marginTop: 6 },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: theme.ink,
-    marginBottom: 8,
-  },
-  phoneField: {
-    flexDirection: "row",
-    alignItems: "center",
-    height: 54,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: theme.hairline,
-    backgroundColor: theme.background,
-  },
-  phonePrefix: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: theme.ink,
-    marginRight: 10,
-    paddingRight: 10,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: theme.hairline,
-  },
-  phoneInput: { flex: 1, fontSize: 16, color: theme.ink, letterSpacing: 0.4 },
-  helperText: { fontSize: 12.5, color: theme.inkSoft, marginTop: 8 },
-  errorText: { fontSize: 12.5, color: theme.danger, marginTop: 8 },
-  payBtn: {
-    flexDirection: "row",
-    gap: 10,
-    justifyContent: "center",
-    alignItems: "center",
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: theme.ink,
-    marginTop: 22,
-  },
-  payBtnText: { color: "#FFF", fontWeight: "700", fontSize: 16 },
 });

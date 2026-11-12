@@ -1,12 +1,13 @@
 import { useRouter } from "expo-router";
 import { ArrowUp, RotateCcw, Sparkles } from "lucide-react-native";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -52,6 +53,33 @@ export default function NovaScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+
+  // Nova sends the customer's messages and order details to an AI provider,
+  // so we ask for permission first and remember it on the account.
+  const [consent, setConsent] = useState<"checking" | "needed" | "ok">("checking");
+  const [savingConsent, setSavingConsent] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!active) return;
+      setConsent(user?.user_metadata?.nova_consent_at ? "ok" : "needed");
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const acceptConsent = async () => {
+    if (savingConsent) return;
+    setSavingConsent(true);
+    setConsentError(null);
+    const { error } = await supabase.auth.updateUser({ data: { nova_consent_at: new Date().toISOString() } });
+    setSavingConsent(false);
+    if (error) return setConsentError(error.message || "Could not save your choice. Please try again.");
+    setConsent("ok");
+  };
 
   const scrollToEnd = () => requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
 
@@ -174,6 +202,58 @@ export default function NovaScreen() {
     </View>
   );
 
+  if (consent === "checking") {
+    return (
+      <View style={[styles.container, { justifyContent: "center", alignItems: "center" }]}>
+        <ActivityIndicator size="large" color={Colors.gold} />
+      </View>
+    );
+  }
+
+  if (consent === "needed") {
+    return (
+      <ScrollView style={styles.container} contentContainerStyle={[styles.consentWrap, { paddingBottom: 32 + insets.bottom }]} showsVerticalScrollIndicator={false}>
+        <View style={styles.welcomeIcon}>
+          <Sparkles size={26} color={Colors.gold} strokeWidth={1.75} />
+        </View>
+        <Text style={styles.welcomeTitle}>Before you chat with Nova</Text>
+        <Text style={styles.welcomeText}>Nova is an AI assistant. To answer you, it needs to share some information with our AI provider (Anthropic).</Text>
+
+        <View style={styles.consentCard}>
+          {[
+            "Your messages to Nova are sent to the AI provider.",
+            "So Nova can talk about your orders, it also receives your name, our cake catalog, and details of your last few orders: order numbers, cake names, stages, payment status, amounts and event dates.",
+            "Nova does not receive your phone number, email address or payment details.",
+            "Chats are not saved in the app, and Nova can make mistakes. Check order details in the Orders tab.",
+          ].map((line) => (
+            <View key={line} style={styles.consentLine}>
+              <View style={styles.consentDot} />
+              <Text style={styles.consentLineText}>{line}</Text>
+            </View>
+          ))}
+        </View>
+
+        <Pressable onPress={() => router.push("/legal/privacy")} hitSlop={8}>
+          <Text style={styles.consentLink}>Read the Privacy Policy</Text>
+        </Pressable>
+
+        {!!consentError && <Text style={styles.consentError}>{consentError}</Text>}
+
+        <Pressable
+          onPress={acceptConsent}
+          disabled={savingConsent}
+          style={({ pressed }) => [styles.consentBtn, pressed && { opacity: 0.9 }, savingConsent && { opacity: 0.7 }]}
+          accessibilityRole="button"
+        >
+          {savingConsent ? <ActivityIndicator color="#FFF" /> : <Text style={styles.consentBtnText}>I understand, continue</Text>}
+        </Pressable>
+        <Pressable onPress={() => router.back()} style={styles.consentSecondary} accessibilityRole="button">
+          <Text style={styles.consentSecondaryText}>Not now</Text>
+        </Pressable>
+      </ScrollView>
+    );
+  }
+
   const canSend = input.trim().length > 0 && !sending;
 
   return (
@@ -276,6 +356,18 @@ const styles = StyleSheet.create({
   chips: { marginTop: 22, gap: 10, alignSelf: "stretch" },
   chip: { paddingHorizontal: 16, paddingVertical: 13, borderRadius: 16, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.hairline },
   chipText: { fontSize: 14.5, fontWeight: "600", color: Colors.ink },
+
+  consentWrap: { padding: 24, alignItems: "center" },
+  consentCard: { alignSelf: "stretch", backgroundColor: Colors.surface, borderRadius: 18, padding: 16, marginTop: 22, gap: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: Colors.hairline },
+  consentLine: { flexDirection: "row", gap: 10 },
+  consentDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.gold, marginTop: 8 },
+  consentLineText: { flex: 1, fontSize: 14.5, lineHeight: 21, color: Colors.inkSoft },
+  consentLink: { fontSize: 14, fontWeight: "600", color: Colors.ink, textDecorationLine: "underline", marginTop: 16 },
+  consentError: { fontSize: 13, color: Colors.danger, marginTop: 12, textAlign: "center" },
+  consentBtn: { alignSelf: "stretch", height: 54, borderRadius: 16, backgroundColor: Colors.ink, justifyContent: "center", alignItems: "center", marginTop: 22 },
+  consentBtnText: { color: "#FFF", fontWeight: "700", fontSize: 16 },
+  consentSecondary: { height: 48, justifyContent: "center", marginTop: 6 },
+  consentSecondaryText: { fontSize: 15, fontWeight: "600", color: Colors.inkSoft },
 
   composer: { paddingHorizontal: 16, paddingTop: 10, backgroundColor: Colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Colors.hairline },
   inputWrap: { flexDirection: "row", alignItems: "flex-end", gap: 10, backgroundColor: Colors.background, borderRadius: 24, borderWidth: StyleSheet.hairlineWidth, borderColor: Colors.hairline, paddingLeft: 16, paddingRight: 6, paddingVertical: 6 },
