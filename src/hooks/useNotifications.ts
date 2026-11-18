@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 export type AppNotification = {
@@ -34,6 +34,7 @@ export function timeAgo(iso: string): string {
  */
 export function useNotifications() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const instanceId = useRef(Math.random().toString(36).slice(2)).current;
 
   const load = useCallback(async () => {
     const {
@@ -53,31 +54,32 @@ export function useNotifications() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+  let cancelled = false;
+  let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    (async () => {
-      await load();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (cancelled || !user) return;
+  (async () => {
+    await load();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (cancelled || !user) return;
 
-      channel = supabase
-        .channel(`notifications:${user.id}`)
-        .on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` },
-          (payload) => setNotifications((prev) => [payload.new as AppNotification, ...prev].slice(0, LIMIT))
-        )
-        .subscribe();
-    })();
+    channel = supabase
+      .channel(`notifications:${user.id}:${instanceId}`) // unique per hook instance
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` },
+        (payload) => setNotifications((prev) => [payload.new as AppNotification, ...prev].slice(0, LIMIT))
+      )
+      .subscribe();
+  })();
 
-    return () => {
-      cancelled = true;
-      if (channel) supabase.removeChannel(channel);
-    };
-  }, [load]);
+  return () => {
+    cancelled = true;
+    if (channel) supabase.removeChannel(channel);
+  };
+}, [load, instanceId]);
+    
 
   const markAllRead = useCallback(async () => {
     const now = new Date().toISOString();

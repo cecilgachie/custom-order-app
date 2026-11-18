@@ -23,6 +23,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Colors } from "../../constants/Colors";
 import { useAppToast } from "../../context/ToastContext";
+import { displayName } from "../../lib/displayName";
 import { sharePdf } from "../../lib/pdf";
 import { supabase } from "../../lib/supabase";
 
@@ -213,7 +214,7 @@ export default function MasterSystemDashboard() {
 
   const customerLabel = (c: Complaint) => {
     const p = c.user_id ? customers[c.user_id] : undefined;
-    return p?.full_name || p?.username || "Unknown customer";
+    return displayName(p, "Unknown customer");
   };
 
   /* ---------- actions ---------- */

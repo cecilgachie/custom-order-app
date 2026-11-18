@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Colors } from "../../constants/Colors";
 import { useAppToast } from "../../context/ToastContext";
+import { displayName } from "../../lib/displayName";
 import { supabase } from "../../lib/supabase";
 
 /* ------------------------------------------------------------------ */
@@ -36,7 +37,7 @@ const FILTER_LABEL: Partial<Record<Filter, string>> = { "Pending Review": "In re
 
 type Order = {
   id: string;
-  user_id: string;
+  user_id: string | null;
   order_number?: string | null;
   cake_title: string;
   flavor?: string | null;
@@ -53,7 +54,7 @@ type Order = {
   order_status?: string | null;
   created_at?: string | null;
 };
-type Customer = { full_name?: string | null; email?: string | null };
+type Customer = { full_name?: string | null; username?: string | null };
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -127,11 +128,11 @@ export default function AdminOrdersScreen() {
       const rows = (data as Order[]) || [];
       setOrders(rows);
 
-      const ids = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean)));
+      const ids = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean))) as string[];
       if (ids.length > 0) {
-        const { data: people } = await supabase.from("profiles").select("id, full_name, email").in("id", ids);
+        const { data: people } = await supabase.from("profiles").select("id, full_name, username").in("id", ids);
         const map: Record<string, Customer> = {};
-        (people || []).forEach((p: any) => (map[p.id] = { full_name: p.full_name, email: p.email }));
+        (people || []).forEach((p: any) => (map[p.id] = { full_name: p.full_name, username: p.username }));
         setCustomers(map);
       }
     } catch (e: any) {
@@ -149,7 +150,7 @@ export default function AdminOrdersScreen() {
   );
 
   const customerLabel = useCallback(
-    (o: Order) => customers[o.user_id]?.full_name || customers[o.user_id]?.email || "Customer",
+    (o: Order) => (!o.user_id ? "Deleted account" : displayName(customers[o.user_id], "Customer")),
     [customers]
   );
 
@@ -173,7 +174,7 @@ export default function AdminOrdersScreen() {
     });
     if (q) {
       list = list.filter((o) =>
-        [o.order_number, o.cake_title, o.flavor, customerLabel(o), customers[o.user_id]?.email]
+        [o.order_number, o.cake_title, o.flavor, customerLabel(o), customers[o.user_id ?? ""]?.username]
           .filter(Boolean)
           .some((v) => String(v).toLowerCase().includes(q))
       );

@@ -168,6 +168,18 @@ function RootNavigator() {
       return;
     }
 
+    // Accounts created by an admin start with a temporary password and must choose their own first.
+    // The flag is in app_metadata, which only the server can change.
+    const mustChangePassword = !!session.user.app_metadata?.must_change_password;
+    if (mustChangePassword) {
+      if (segs[0] !== "change-password") router.replace("/change-password");
+      return;
+    }
+    if (segs[0] === "change-password") {
+      router.replace("/");
+      return;
+    }
+
     if (userRole && ADMIN_ROLES.includes(userRole)) {
       if (!inAdminGroup && !inPublic) router.replace("/(admin)");
     } else if (inAuthGroup || inAdminGroup) {
@@ -191,6 +203,7 @@ function RootNavigator() {
         <Stack.Screen name="legal/privacy" options={{ ...brandedHeader, title: "Privacy Policy" }} />
         <Stack.Screen name="legal/terms" options={{ ...brandedHeader, title: "Terms of Service" }} />
         <Stack.Screen name="auth-callback" />
+        <Stack.Screen name="change-password" options={{ gestureEnabled: false }} />
         <Stack.Screen name="receipt" options={{ ...brandedHeader, title: "Receipt" }} />
         <Stack.Screen name="nova" options={{ ...brandedHeader, title: "Nova" }} />
       </Stack>

@@ -28,6 +28,7 @@ import {
 } from "react-native";
 import { Colors } from "../../constants/Colors";
 import { useAppToast } from "../../context/ToastContext";
+import { realName } from "../../lib/displayName";
 import { supabase } from "../../lib/supabase";
 
 /* ------------------------------------------------------------------ */
@@ -294,11 +295,11 @@ export default function ProfileScreen() {
   }
 
   const username: string | null = profile?.username || null;
-  const hasFullName = !!profile?.full_name?.trim();
-  // Real name if they gave one, otherwise their username
-  const displayName = hasFullName ? (profile!.full_name as string) : username || "Customer";
-  const handle = hasFullName && username ? `@${username}` : "";
-  const initials = getInitials(profile?.full_name || username);
+  // A real name if they gave one (placeholders like "Valued Customer" do not count), otherwise their username
+  const fullName = realName(profile?.full_name);
+  const displayName = fullName || username || "Customer";
+  const handle = fullName && username ? `@${username}` : "";
+  const initials = getInitials(fullName || username);
   const role = formatRole(profile?.system_role);
   const isStaff = role.toLowerCase() !== "customer";
 

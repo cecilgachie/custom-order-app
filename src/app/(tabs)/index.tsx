@@ -67,8 +67,8 @@ const theme = {
 /* ------------------------------------------------------------------ */
 /* Business rules (edit here, not in the JSX)                          */
 /* ------------------------------------------------------------------ */
-const PRICE_PER_KG = 2200; // KES, matches your previous display math
-const DEFAULT_ORDER_WEIGHT_KG = 1.0; // instant "Add to cart" preset
+const PRICE_PER_KG = 1000; // KES
+const DEFAULT_ORDER_WEIGHT_KG = 0.5; // instant "Add to cart" preset
 const CATEGORIES = ["All", "Wedding", "Birthday", "Cupcakes", "Custom"];
 
 /**
@@ -101,36 +101,140 @@ const buildDefaultOrder = (item: CakeItem, userId: string) => ({
 });
 
 /* ------------------------------------------------------------------ */
-/* Image strategy: remote URL first, then local fallback, then vector  */
+/* Types                                                               */
 /* ------------------------------------------------------------------ */
-/**
- * Local fallbacks, keyed by catalog `image_key`, `id`, or the slugified
- * title. Entries are optional, so the app compiles with an empty map.
- * Add an asset by uncommenting / adding a line, e.g.:
- *
- *   "chocolate-drip": require("../../../assets/images/chocolate_drip.png"),
- */
-const localCakeImages: Record<string, ImageSourcePropType> = {
-  // "chocolate-drip": require("../../../assets/images/chocolate_drip.png"),
+type CakeItem = {
+  id: string | number;
+  title: string;
+  description?: string | null;
+  base_flavor?: string | null;
+  default_weight_kg?: number | null;
+  image_url?: string | null;
+  image_key?: string | null;
+  localImage?: ImageSourcePropType | null; // bundled image (assets/images/N.jpg)
+  category?: string | null;
+  ingredients?: string[] | string | null;
+  lead_time_hours?: number | null;
+  tiers?: number | null;
+  layers?: number | null;
+  finish?: string | null;
+  [key: string]: any;
 };
 
-const slugify = (value?: string) =>
-  (value || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
+/* ------------------------------------------------------------------ */
+/* Local cakes: assets/images/1.jpg ... 10.jpg                         */
+/*                                                                     */
+/* require() must be static (Metro resolves it at build time), so      */
+/* every image is listed explicitly. To add more: copy a block below   */
+/* and point it at 11.jpg, 12.jpg ...                                  */
+/*                                                                     */
+/* PATH NOTE: this file is assumed to be app/(tabs)/index.tsx, so      */
+/* "../../assets/images/" reaches <project>/assets/images/.            */
+/* If your file is app/(tabs)/home/index.tsx, change every "../../"    */
+/* in the paths below to "../../../".                                  */
+/* ------------------------------------------------------------------ */
+const LOCAL_CAKES: CakeItem[] = [
+  {
+    id: "local-1",
+    title: "Classic Chocolate Drip",
+    description: "Rich chocolate sponge layered with ganache and finished with a glossy drip.",
+    base_flavor: "Chocolate",
+    category: "Birthday",
+    default_weight_kg: 1,
+    localImage: require("../../../assets/images/2.jpg"),
+  },
+  {
+    id: "local-2",
+    title: "Vanilla Dream",
+    description: "Soft vanilla sponge with silky buttercream and delicate piping.",
+    base_flavor: "Vanilla",
+    category: "Wedding",
+    default_weight_kg: 1,
+    localImage: require("../../../assets/images/9.jpg"),
+  },
+  {
+    id: "local-3",
+    title: "Red Velvet Romance",
+    description: "Velvety red sponge with tangy cream cheese frosting.",
+    base_flavor: "Red Velvet",
+    category: "Birthday",
+    default_weight_kg: 1,
+    localImage: require("../../../assets/images/3.jpg"),
+  },
+  {
+    id: "local-4",
+    title: "Strawberry Bliss",
+    description: "Light sponge filled with fresh strawberry cream and topped with berries.",
+    base_flavor: "Strawberry",
+    category: "Birthday",
+    default_weight_kg: 1,
+    localImage: require("../../../assets/images/4.jpg"),
+  },
+  {
+    id: "local-5",
+    title: "Elegant Tiered Wedding Cake",
+    description: "A graceful multi-tier cake with floral detailing, made for your big day.",
+    base_flavor: "Vanilla",
+    category: "Wedding",
+    default_weight_kg: 3,
+    tiers: 3,
+    localImage: require("../../../assets/images/5.jpg"),
+  },
+  {
+    id: "local-6",
+    title: "Lemon Zest Cupcakes",
+    description: "Bright lemon cupcakes with a swirl of lemon buttercream.",
+    base_flavor: "Lemon",
+    category: "Cupcakes",
+    default_weight_kg: 0.5,
+    localImage: require("../../../assets/images/6.jpg"),
+  },
+  {
+    id: "local-7",
+    title: "Caramel Crunch",
+    description: "Buttery caramel sponge with salted caramel and a crunchy topping.",
+    base_flavor: "Caramel",
+    category: "Custom",
+    default_weight_kg: 1,
+    localImage: require("../../../assets/images/7.jpg"),
+  },
+  {
+    id: "local-8",
+    title: "Black Forest",
+    description: "Chocolate sponge, whipped cream and cherries, topped with chocolate shavings.",
+    base_flavor: "Chocolate",
+    category: "Birthday",
+    default_weight_kg: 1,
+    localImage: require("../../../assets/images/8.jpg"),
+  },
+  {
+    id: "local-9",
+    title: "Rainbow Celebration",
+    description: "Colourful layers with vanilla frosting, perfect for kids' parties.",
+    base_flavor: "Vanilla",
+    category: "Custom",
+    default_weight_kg: 1,
+    localImage: require("../../../assets/images/1.jpg"),
+  },
+  {
+    id: "local-10",
+    title: "Chocolate Cupcake Box",
+    description: "Six moist chocolate cupcakes topped with whipped chocolate frosting.",
+    base_flavor: "Chocolate",
+    category: "Cupcakes",
+    default_weight_kg: 0.5,
+    localImage: require("../../../assets/images/10.jpg"),
+  },
+];
 
-const getLocalImage = (item: CakeItem): ImageSourcePropType | null =>
-  localCakeImages[String(item.image_key ?? "")] ||
-  localCakeImages[String(item.id)] ||
-  localCakeImages[slugify(item.title)] ||
-  null;
+/* ------------------------------------------------------------------ */
+/* Image strategy: remote URL first, then local image, then vector     */
+/* ------------------------------------------------------------------ */
+const getLocalImage = (item: CakeItem): ImageSourcePropType | null => item.localImage ?? null;
 
 /**
  * image_url can be a full web address, or just a file name in the public
  * "cake-images" Supabase Storage bucket (e.g. "chocolate-drip.jpg").
- * Typing only the file name is easier and avoids copy-paste mistakes.
  */
 const resolveImageUrl = (value?: string | null): string | null => {
   const v = value?.trim();
@@ -193,25 +297,8 @@ function CakeImage({
 }
 
 /* ------------------------------------------------------------------ */
-/* Types + helpers                                                     */
+/* Helpers                                                             */
 /* ------------------------------------------------------------------ */
-type CakeItem = {
-  id: string | number;
-  title: string;
-  description?: string | null;
-  base_flavor?: string | null;
-  default_weight_kg?: number | null;
-  image_url?: string | null;
-  image_key?: string | null;
-  category?: string | null;
-  ingredients?: string[] | string | null;
-  lead_time_hours?: number | null;
-  tiers?: number | null;
-  layers?: number | null;
-  finish?: string | null;
-  [key: string]: any;
-};
-
 const priceFor = (weightKg: number) => Math.round(weightKg * PRICE_PER_KG);
 const formatKes = (n: number) => `KES ${n.toLocaleString()}`;
 
@@ -274,6 +361,7 @@ export default function HomeScreen() {
       if (error) throw error;
       setCatalog((data as CakeItem[]) || []);
     } catch {
+      // Local cakes still show even if the DB call fails
       toastRef.current("Failed to pull cake inventory.");
     } finally {
       setLoading(false);
@@ -281,20 +369,18 @@ export default function HomeScreen() {
     }
   }, []);
 
-  // Runs once (the previous effect had no dependency array and refetched on every render)
   useEffect(() => {
     loadCatalog();
   }, [loadCatalog]);
 
   const filteredCatalog = useMemo(() => {
-    let result = catalog;
+    let result: CakeItem[] = [...LOCAL_CAKES, ...catalog]; // local cakes first, DB cakes after
     if (selectedCategory !== "All") {
       const cat = selectedCategory.toLowerCase();
-      result = result.filter(
-        (item) =>
-          item.category
-            ? item.category.toLowerCase() === cat
-            : item.description?.toLowerCase().includes(cat) || item.title?.toLowerCase().includes(cat)
+      result = result.filter((item) =>
+        item.category
+          ? item.category.toLowerCase() === cat
+          : item.description?.toLowerCase().includes(cat) || item.title?.toLowerCase().includes(cat)
       );
     }
     const q = searchQuery.trim().toLowerCase();

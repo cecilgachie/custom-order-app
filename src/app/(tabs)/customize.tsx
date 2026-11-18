@@ -54,8 +54,8 @@ const theme = {
 type CakeSize = "Small" | "Medium" | "Large";
 
 const SIZE_MULTIPLIERS: Record<CakeSize, number> = { Small: 0.8, Medium: 1.0, Large: 1.4 };
-const BASE_PRICE_PER_KG = 1100; // KES
-const MIN_WEIGHT_KG = 1.0;
+const BASE_PRICE_PER_KG = 1000; // KES
+const MIN_WEIGHT_KG = 0.5;
 const MAX_WEIGHT_KG = 20;
 const WEIGHT_STEP = 0.5;
 const SERVINGS_PER_KG = 8;
@@ -65,11 +65,11 @@ const MAX_INSCRIPTION = 45;
 const FLAVOR_OPTIONS = ["Vanilla", "Chocolate", "Red Velvet", "Strawberry", "Lemon", "Marble"];
 const COLOR_OPTIONS = [
   { name: "Standard White", hex: "#FFFFFF" },
-  { name: "Blush Pink", hex: "#F4C6D0" },
+  { name: "Purple", hex: "#cb4390f8" },
   { name: "Gold", hex: "#C9A45C" },
   { name: "Chocolate Brown", hex: "#4A2C1D" },
   { name: "Sky Blue", hex: "#BFD9EE" },
-  { name: "Sage Green", hex: "#B7C9A8" },
+  { name: "Garden green", hex: "#04a243" },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -400,7 +400,7 @@ export default function CustomizeScreen() {
               style={styles.fieldTextInputElement}
               value={frostingMessage}
               onChangeText={setFrostingMessage}
-              placeholder="e.g. Happy Birthday Felix"
+              placeholder="e.g. Happy Birthday Francis"
               placeholderTextColor={theme.inkMuted}
               maxLength={MAX_INSCRIPTION}
             />
