@@ -1,6 +1,6 @@
 import { BlurView } from "expo-blur";
 import { useFocusEffect, useRouter } from "expo-router";
-import { Check, ChevronRight, ShoppingBag, Smartphone, Trash2 } from "lucide-react-native";
+import { CalendarDays, Check, ChevronRight, ShoppingBag, Smartphone, Trash2 } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -14,6 +14,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import EventDateSheet from "../../components/EventDateSheet";
 import MpesaPaySheet from "../../components/MpesaPaySheet";
 import { Colors } from "../../constants/Colors";
 import { useAppToast } from "../../context/ToastContext";
@@ -44,6 +45,8 @@ type CartItem = {
   cake_message?: string | null;
   total_price: number | string;
   payment_type: PaymentType;
+  event_date?: string | null;
+  guest_count?: number | null;
   [key: string]: any;
 };
 
@@ -57,6 +60,12 @@ const totalsOf = (items: CartItem[]) => {
   const gross = items.reduce((s, i) => s + priceOf(i), 0);
   const now = items.reduce((s, i) => s + dueNowOf(i), 0);
   return { gross, now, later: gross - now };
+};
+
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const formatEvent = (iso: string) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return y && m && d ? `${d} ${MONTHS_SHORT[m - 1]} ${y}` : iso;
 };
 
 const confirmAction = (title: string, message: string, confirmLabel: string, onConfirm: () => void) => {
@@ -94,6 +103,8 @@ export default function CartScreen() {
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
   // Cakes in the open checkout sheet (one cake, or all ticked cakes)
   const [checkoutIds, setCheckoutIds] = useState<string[] | null>(null);
+  // Which cake's event date is being chosen (cakes added with the quick "+" start with no date)
+  const [dateItemId, setDateItemId] = useState<string | null>(null);
 
   const token = useRef({ cancelled: false });
   useEffect(() => {
@@ -209,10 +220,17 @@ export default function CartScreen() {
 
   /* ---------- totals ---------- */
   const selectedTotals = useMemo(() => totalsOf(selectedItems), [selectedItems]);
+  const missingDateCount = selectedItems.filter((i) => !i.event_date).length;
 
   /* ---------- checkout ---------- */
   const openCheckout = (ids: string[]) => {
     if (ids.length === 0 || updatingId) return;
+    // Every cake needs an event date before it can be paid for: ask for the first missing one
+    const missing = cartItems.find((i) => ids.includes(String(i.id)) && !i.event_date);
+    if (missing) {
+      setDateItemId(String(missing.id));
+      return;
+    }
     setCheckoutIds(ids);
   };
 
@@ -328,6 +346,26 @@ export default function CartScreen() {
           </View>
         )}
 
+        {/* Event date + guests */}
+        <Pressable
+          onPress={() => setDateItemId(id)}
+          disabled={isPending}
+          style={({ pressed }) => [styles.dateRow, !item.event_date && styles.dateRowMissing, pressed && { opacity: 0.85 }]}
+          accessibilityRole="button"
+          accessibilityLabel={item.event_date ? `Event date ${formatEvent(item.event_date)}. Change` : "Choose the event date"}
+        >
+          <CalendarDays size={18} color={item.event_date ? theme.gold : theme.danger} strokeWidth={1.75} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.dateTitle, !item.event_date && { color: theme.danger }]}>
+              {item.event_date ? formatEvent(item.event_date) : "Choose the date you need it"}
+            </Text>
+            <Text style={styles.dateSub}>
+              {item.event_date ? `${item.guest_count || "?"} guests` : "Required before you can pay"}
+            </Text>
+          </View>
+          <Text style={styles.dateLink}>{item.event_date ? "Change" : "Set date"}</Text>
+        </Pressable>
+
         <View style={styles.billingRow}>
           <View>
             <Text style={styles.priceLabel}>{isDeposit ? "Pay now (50%)" : "Pay now"}</Text>
@@ -370,7 +408,7 @@ export default function CartScreen() {
             accessibilityLabel={`Pay for ${item.cake_title} only`}
           >
             <Smartphone size={16} color={theme.ink} strokeWidth={1.75} />
-            <Text style={styles.payOneText}>Pay {formatKes(dueNowOf(item))} for this cake</Text>
+            <Text style={styles.payOneText}>{item.event_date ? `Pay ${formatKes(dueNowOf(item))} for this cake` : "Choose the date to pay for this cake"}</Text>
           </Pressable>
         )}
       </View>
@@ -454,12 +492,26 @@ export default function CartScreen() {
           >
             <Smartphone size={19} color={theme.gold} strokeWidth={1.9} />
             <Text style={styles.checkoutBtnText}>
-              {selectedCount === 0 ? "Select a cake to pay" : `Pay ${selectedCount} ${selectedCount === 1 ? "cake" : "cakes"} with M-Pesa`}
+              {selectedCount === 0
+                ? "Select a cake to pay"
+                : missingDateCount > 0
+                  ? `Choose the event date${missingDateCount > 1 ? "s" : ""} to continue`
+                  : `Pay ${selectedCount} ${selectedCount === 1 ? "cake" : "cakes"} with M-Pesa`}
             </Text>
             {selectedCount > 0 && <ChevronRight size={18} color="#FFF" style={{ marginLeft: "auto" }} />}
           </Pressable>
         </BlurView>
       )}
+
+      <EventDateSheet
+        visible={dateItemId !== null}
+        item={cartItems.find((i) => String(i.id) === dateItemId) ?? null}
+        onClose={() => setDateItemId(null)}
+        onSaved={(patch) => {
+          setCartItems((prev) => prev.map((i) => (String(i.id) === dateItemId ? { ...i, ...patch } : i)));
+          setDateItemId(null);
+        }}
+      />
 
       <MpesaPaySheet
         visible={checkoutIds !== null}
@@ -530,6 +582,15 @@ const styles = StyleSheet.create({
   segmentBtnActive: { backgroundColor: theme.ink },
   segmentText: { fontSize: 12.5, fontWeight: "600", color: theme.inkSoft },
   segmentTextActive: { color: theme.gold },
+
+  dateRow: {
+    flexDirection: "row", alignItems: "center", gap: 12, marginTop: 14, paddingHorizontal: 14, paddingVertical: 12,
+    borderRadius: 14, backgroundColor: theme.goldTint,
+  },
+  dateRowMissing: { backgroundColor: theme.dangerTint, borderWidth: 1, borderColor: theme.dangerBorder },
+  dateTitle: { fontSize: 14.5, fontWeight: "700", color: theme.ink },
+  dateSub: { fontSize: 12.5, color: theme.inkSoft, marginTop: 1 },
+  dateLink: { fontSize: 13.5, fontWeight: "700", color: theme.ink, textDecorationLine: "underline" },
 
   payOneBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 46, borderRadius: 14,

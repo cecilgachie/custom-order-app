@@ -11,13 +11,9 @@ const requireEnv = (name: string): string => {
 
 /** Service-role client. Bypasses RLS, so use only inside Edge Functions. */
 const adminClient = () =>
-  createClient(
-    requireEnv("SUPABASE_URL"),
-    requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
-    {
-      auth: { persistSession: false },
-    },
-  );
+  createClient(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SERVICE_ROLE_KEY"), {
+    auth: { persistSession: false },
+  });
 
 /** Constant-time string comparison for shared secrets. */
 function timingSafeEqual(a: string, b: string): boolean {
@@ -39,8 +35,7 @@ const ack = () => Response.json({ ResultCode: 0, ResultDesc: "Accepted" });
  * (?token=...) that only Safaricom and this function know.
  */
 Deno.serve(async (req) => {
-  if (req.method !== "POST")
-    return new Response("Method not allowed", { status: 405 });
+  if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
   const token = new URL(req.url).searchParams.get("token") ?? "";
   if (!timingSafeEqual(token, requireEnv("MPESA_CALLBACK_SECRET"))) {
@@ -57,18 +52,14 @@ Deno.serve(async (req) => {
   const callback = payload?.Body?.stkCallback;
   if (!callback?.CheckoutRequestID) return ack();
 
-  const items: { Name: string; Value?: string | number }[] =
-    callback.CallbackMetadata?.Item ?? [];
+  const items: { Name: string; Value?: string | number }[] = callback.CallbackMetadata?.Item ?? [];
   const meta = (name: string) => items.find((i) => i.Name === name)?.Value;
 
   const { data, error } = await adminClient().rpc("settle_mpesa_payment", {
     p_checkout_request_id: String(callback.CheckoutRequestID),
     p_result_code: Number(callback.ResultCode),
     p_result_desc: String(callback.ResultDesc ?? ""),
-    p_receipt:
-      meta("MpesaReceiptNumber") != null
-        ? String(meta("MpesaReceiptNumber"))
-        : null,
+    p_receipt: meta("MpesaReceiptNumber") != null ? String(meta("MpesaReceiptNumber")) : null,
     p_paid_amount: meta("Amount") != null ? Number(meta("Amount")) : null,
     p_raw: payload,
   });

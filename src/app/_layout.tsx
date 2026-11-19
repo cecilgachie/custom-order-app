@@ -206,6 +206,7 @@ function RootNavigator() {
         <Stack.Screen name="change-password" options={{ gestureEnabled: false }} />
         <Stack.Screen name="receipt" options={{ ...brandedHeader, title: "Receipt" }} />
         <Stack.Screen name="nova" options={{ ...brandedHeader, title: "Nova" }} />
+        <Stack.Screen name="customize" />
       </Stack>
 
       {/* Covers the app until we know who is signed in, so nobody sees a

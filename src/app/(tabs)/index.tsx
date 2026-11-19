@@ -141,7 +141,7 @@ const LOCAL_CAKES: CakeItem[] = [
     base_flavor: "Chocolate",
     category: "Birthday",
     default_weight_kg: 1,
-    localImage: require("../../../assets/images/2.jpg"),
+    localImage: require("../../../assets/images/002.jpeg"),
   },
   {
     id: "local-2",
@@ -159,7 +159,7 @@ const LOCAL_CAKES: CakeItem[] = [
     base_flavor: "Red Velvet",
     category: "Birthday",
     default_weight_kg: 1,
-    localImage: require("../../../assets/images/3.jpg"),
+    localImage: require("../../../assets/images/004.jpeg"),
   },
   {
     id: "local-4",
@@ -187,7 +187,7 @@ const LOCAL_CAKES: CakeItem[] = [
     base_flavor: "Lemon",
     category: "Cupcakes",
     default_weight_kg: 0.5,
-    localImage: require("../../../assets/images/6.jpg"),
+    localImage: require("../../../assets/images/001.jpeg"),
   },
   {
     id: "local-7",
@@ -223,7 +223,7 @@ const LOCAL_CAKES: CakeItem[] = [
     base_flavor: "Chocolate",
     category: "Cupcakes",
     default_weight_kg: 0.5,
-    localImage: require("../../../assets/images/10.jpg"),
+    localImage: require("../../../assets/images/003.jpeg"),
   },
 ];
 

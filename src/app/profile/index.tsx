@@ -11,6 +11,8 @@ import {
   ChevronRight,
   LogOut,
   FileText,
+  Mail,
+  MessageCircle,
   Package,
   ShieldCheck,
   Trash2,
@@ -19,6 +21,7 @@ import {
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -27,6 +30,7 @@ import {
   View,
 } from "react-native";
 import { Colors } from "../../constants/Colors";
+import { SUPPORT } from "../../constants/support";
 import { useAppToast } from "../../context/ToastContext";
 import { realName } from "../../lib/displayName";
 import { supabase } from "../../lib/supabase";
@@ -180,6 +184,29 @@ export default function ProfileScreen() {
       { text: "Stay signed in", style: "cancel" },
       { text: "Log out", style: "destructive", onPress: performLogOut },
     ]);
+  };
+
+  /* ---------- contact support ---------- */
+  const supportSignature = () => (profile?.username ? `My username is ${profile.username}.` : "");
+
+  const openSupportEmail = async () => {
+    const subject = encodeURIComponent("Vatican Cake Point support");
+    const body = encodeURIComponent(`Hello,\n\n${supportSignature()}\n\nMy question:\n`);
+    try {
+      await Linking.openURL(`mailto:${SUPPORT.email}?subject=${subject}&body=${body}`);
+    } catch {
+      showToast(`No email app found. You can write to ${SUPPORT.email}`, { type: "info", duration: 12000 });
+    }
+  };
+
+  const openSupportWhatsApp = async () => {
+    const text = encodeURIComponent(`Hello Vatican Cake Point, I need help. ${supportSignature()}`.trim());
+    try {
+      // wa.me opens WhatsApp when it is installed, and WhatsApp Web in a browser when it is not
+      await Linking.openURL(`https://wa.me/${SUPPORT.whatsapp}?text=${text}`);
+    } catch {
+      showToast(`Could not open WhatsApp. You can message ${SUPPORT.whatsappDisplay} directly.`, { type: "info", duration: 12000 });
+    }
   };
 
   /* ---------- profile picture ---------- */
@@ -400,12 +427,30 @@ export default function ProfileScreen() {
           subtitle="Spending, flavors and upcoming events"
           onPress={() => router.push("/profile/analytics")}
         />
-        <View style={styles.separator} />
+      </View>
+
+      {/* HELP AND SUPPORT */}
+      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Help and support</Text>
+      <View style={styles.listCard}>
         <MenuRow
           icon={<AlertTriangle size={18} color={theme.gold} strokeWidth={1.75} />}
           title="File a Support Complaint"
           subtitle="Tell us what went wrong"
           onPress={() => router.push("/profile/file-complaint")}
+        />
+        <View style={styles.separator} />
+        <MenuRow
+          icon={<Mail size={18} color={theme.gold} strokeWidth={1.75} />}
+          title="Email support"
+          subtitle={SUPPORT.email}
+          onPress={openSupportEmail}
+        />
+        <View style={styles.separator} />
+        <MenuRow
+          icon={<MessageCircle size={18} color={theme.gold} strokeWidth={1.75} />}
+          title="Chat on WhatsApp"
+          subtitle={SUPPORT.whatsappDisplay}
+          onPress={openSupportWhatsApp}
         />
       </View>
 
