@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, T
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Colors } from "../../constants/Colors";
 import { useAppToast } from "../../context/ToastContext";
+import { realName } from "../../lib/displayName";
 import { escapeHtml, pdfDocument, sharePdf } from "../../lib/pdf";
 import { supabase } from "../../lib/supabase";
 
@@ -99,8 +100,8 @@ export default function AnalyticsScreen() {
       if (error) throw error;
       setOrders((data as OrderRow[]) || []);
 
-      const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle();
-      setCustomerName(profile?.full_name ?? null);
+      const { data: profile } = await supabase.from("profiles").select("full_name, username").eq("id", user.id).maybeSingle();
+      setCustomerName(realName(profile?.full_name) || profile?.username || null);
     } catch (e: any) {
       setLoadError(e?.message || "Could not load your analytics.");
     } finally {
@@ -269,7 +270,7 @@ export default function AnalyticsScreen() {
       const html = pdfDocument({
         title: "Cake ordering report",
         meta: [
-          ["Prepared for", customerName || "Valued customer"],
+          ["Prepared for", customerName || "Customer"],
           ["Period", rangeLabel],
           ["Generated", generated],
         ],
@@ -303,8 +304,13 @@ export default function AnalyticsScreen() {
 
   return (
     <View style={styles.container}>
+      <View style={[styles.pageHeader, { paddingTop: insets.top + 16 }]}>
+        <Text style={styles.pageTitle}>My Analytics</Text>
+        <Text style={styles.pageSub}>Your cake ordering at a glance</Text>
+      </View>
+
       <ScrollView
-        contentContainerStyle={[styles.scroll, { paddingBottom: 110 + insets.bottom }]}
+        contentContainerStyle={[styles.scroll, { paddingBottom: 110 }]}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={Colors.gold} colors={[Colors.gold]} />}
       >
@@ -456,7 +462,7 @@ export default function AnalyticsScreen() {
       </ScrollView>
 
       {/* PDF action */}
-      <View style={[styles.footer, { paddingBottom: 14 + insets.bottom }]}>
+      <View style={[styles.footer, { paddingBottom: 14 }]}>
         <Pressable
           onPress={downloadPdf}
           disabled={exporting}
@@ -497,6 +503,9 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   center: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: Colors.background },
   loadingText: { marginTop: 12, color: Colors.inkSoft, fontSize: 14 },
+  pageHeader: { paddingHorizontal: 20, paddingBottom: 6 },
+  pageTitle: { fontSize: 26, fontWeight: "700", color: Colors.ink, letterSpacing: -0.4 },
+  pageSub: { fontSize: 14, color: Colors.inkSoft, marginTop: 3 },
   scroll: { padding: 16 },
 
   errorBanner: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: Colors.dangerTint, borderWidth: 1, borderColor: Colors.dangerBorder, borderRadius: 14, padding: 14, marginBottom: 14 },

@@ -1,7 +1,6 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowLeft,
   Calendar as CalendarIcon,
   Cake,
   Check,
@@ -29,6 +28,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Colors } from "../../constants/Colors";
+import { MAX_WEIGHT_KG, MIN_WEIGHT_KG, PRICE_PER_KG, SIZE_MULTIPLIERS, WEIGHT_STEP } from "../../constants/pricing";
 import { useAppToast } from "../../context/ToastContext";
 import { supabase } from "../../lib/supabase";
 
@@ -53,11 +53,7 @@ const theme = {
 
 type CakeSize = "Small" | "Medium" | "Large";
 
-const SIZE_MULTIPLIERS: Record<CakeSize, number> = { Small: 0.8, Medium: 1.0, Large: 1.4 };
-const BASE_PRICE_PER_KG = 1000; // KES
-const MIN_WEIGHT_KG = 0.5;
-const MAX_WEIGHT_KG = 20;
-const WEIGHT_STEP = 0.5;
+// Prices and weights come from constants/pricing.ts (1,000 per kg, 0.5 kg minimum)
 const SERVINGS_PER_KG = 8;
 const LEAD_DAYS = 2; // earliest bookable date is today + 2 days
 const MAX_INSCRIPTION = 45;
@@ -65,11 +61,11 @@ const MAX_INSCRIPTION = 45;
 const FLAVOR_OPTIONS = ["Vanilla", "Chocolate", "Red Velvet", "Strawberry", "Lemon", "Marble"];
 const COLOR_OPTIONS = [
   { name: "Standard White", hex: "#FFFFFF" },
-  { name: "Purple", hex: "#cb4390f8" },
+  { name: "Blush Pink", hex: "#F4C6D0" },
   { name: "Gold", hex: "#C9A45C" },
   { name: "Chocolate Brown", hex: "#4A2C1D" },
   { name: "Sky Blue", hex: "#BFD9EE" },
-  { name: "Garden green", hex: "#04a243" },
+  { name: "Sage Green", hex: "#B7C9A8" },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -92,6 +88,7 @@ const formatKes = (n: number) => `KES ${Math.round(n).toLocaleString()}`;
 /* ------------------------------------------------------------------ */
 /* Screen                                                              */
 /* ------------------------------------------------------------------ */
+// Save as src/app/(tabs)/customize.tsx (the Customize tab)
 export default function CustomizeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -102,7 +99,7 @@ export default function CustomizeScreen() {
   const readParam = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
   const baseTitle = readParam(params.title) || "Custom Celebration Cake";
   const defaultFlavor = readParam(params.flavor) || "Vanilla";
-  const parsedWeight = parseFloat(readParam(params.weight) || "1.0");
+  const parsedWeight = parseFloat(readParam(params.weight) || String(MIN_WEIGHT_KG));
   const defaultWeight = Number.isFinite(parsedWeight)
     ? Math.min(MAX_WEIGHT_KG, Math.max(MIN_WEIGHT_KG, parsedWeight))
     : MIN_WEIGHT_KG;
@@ -122,10 +119,33 @@ export default function CustomizeScreen() {
   const [errors, setErrors] = useState<{ date?: string; guests?: string; flavor?: string }>({});
   const [saving, setSaving] = useState(false);
 
+  const hasCake = !!readParam(params.title);
+
+  const resetForm = () => {
+    setSelectedSize("Medium");
+    setCakeWeight(defaultWeight);
+    setFlavor(defaultFlavor);
+    setColorTheme("Standard White");
+    setFrostingMessage("");
+    setDesignNotes("");
+    setEventDate(null);
+    setCalendarOpen(false);
+    setGuestCount("15");
+    setErrors({});
+  };
+
+  // This screen is a tab, so it stays alive between visits. When a different cake is
+  // chosen on Home, start the form again for that cake.
+  const cakeKey = `${readParam(params.id) ?? ""}|${baseTitle}|${defaultFlavor}|${defaultWeight}`;
+  useEffect(() => {
+    resetForm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cakeKey]);
+
   /* ---------- pricing ---------- */
   const multiplier = SIZE_MULTIPLIERS[selectedSize];
-  const basePrice = Math.round(cakeWeight * BASE_PRICE_PER_KG);
-  const calculatedTotalPrice = Math.round(cakeWeight * BASE_PRICE_PER_KG * multiplier);
+  const basePrice = Math.round(cakeWeight * PRICE_PER_KG);
+  const calculatedTotalPrice = Math.round(cakeWeight * PRICE_PER_KG * multiplier);
   const sizeAdjustment = calculatedTotalPrice - basePrice;
   const servings = Math.round(cakeWeight * SERVINGS_PER_KG);
 
@@ -217,6 +237,8 @@ export default function CustomizeScreen() {
       if (error) throw error;
 
       showToast("Custom cake saved to your cart! 🎂");
+      resetForm();
+      router.setParams({ id: "", title: "", flavor: "", weight: "" }); // the next visit starts blank
       router.replace("/(tabs)/cart");
     } catch (error: any) {
       showToast(error?.message || "Failed to save your order. Please try again.");
@@ -238,20 +260,11 @@ export default function CustomizeScreen() {
     >
       {/* HEADER */}
       <View style={[styles.headerBar, { height: 60 + insets.top, paddingTop: insets.top }]}>
-        <Pressable
-          style={({ pressed }) => [styles.backBtn, pressed && { backgroundColor: theme.goldTint }]}
-          onPress={() => router.back()}
-          hitSlop={10}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <ArrowLeft size={20} color={theme.ink} strokeWidth={1.9} />
-        </Pressable>
         <Text style={styles.headerTitleText}>Customize your cake</Text>
       </View>
 
       <ScrollView
-        contentContainerStyle={[styles.scrollLayout, { paddingBottom: 130 + insets.bottom }]}
+        contentContainerStyle={styles.scrollLayout}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
@@ -265,7 +278,7 @@ export default function CustomizeScreen() {
             <Text style={styles.cakeHeadline} numberOfLines={2}>
               {baseTitle}
             </Text>
-            <Text style={styles.cakeFlavorSubtitle}>Base recipe: {defaultFlavor}</Text>
+            <Text style={styles.cakeFlavorSubtitle}>{hasCake ? `Base recipe: ${defaultFlavor}` : "Design your own cake from scratch"}</Text>
           </View>
         </View>
 
@@ -400,7 +413,7 @@ export default function CustomizeScreen() {
               style={styles.fieldTextInputElement}
               value={frostingMessage}
               onChangeText={setFrostingMessage}
-              placeholder="e.g. Happy Birthday Francis"
+              placeholder="e.g. Happy Birthday Felix"
               placeholderTextColor={theme.inkMuted}
               maxLength={MAX_INSCRIPTION}
             />
@@ -527,7 +540,7 @@ export default function CustomizeScreen() {
         <View style={styles.breakdownCard}>
           <View style={styles.breakdownRow}>
             <Text style={styles.breakdownLabel}>
-              {cakeWeight.toFixed(1)} kg at {formatKes(BASE_PRICE_PER_KG)}/kg
+              {cakeWeight.toFixed(1)} kg at {formatKes(PRICE_PER_KG)}/kg
             </Text>
             <Text style={styles.breakdownValue}>{formatKes(basePrice)}</Text>
           </View>
@@ -541,7 +554,7 @@ export default function CustomizeScreen() {
       </ScrollView>
 
       {/* FOOTER */}
-      <View style={[styles.floatingActionFooter, { height: 88 + insets.bottom, paddingBottom: insets.bottom }]}>
+      <View style={styles.floatingActionFooter}>
         <View>
           <Text style={styles.footerPriceLabelText}>Estimated total</Text>
           <Text style={styles.footerPriceAmountText}>{formatKes(calculatedTotalPrice)}</Text>

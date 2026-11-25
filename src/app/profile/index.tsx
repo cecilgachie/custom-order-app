@@ -425,7 +425,7 @@ export default function ProfileScreen() {
           icon={<BarChart3 size={18} color={theme.gold} strokeWidth={1.75} />}
           title="My Analytics"
           subtitle="Spending, flavors and upcoming events"
-          onPress={() => router.push("/profile/analytics")}
+          onPress={() => router.push("/(tabs)/analytics")}
         />
       </View>
 

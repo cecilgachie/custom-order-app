@@ -198,7 +198,6 @@ function RootNavigator() {
         <Stack.Screen name="(admin)" options={{ gestureEnabled: false }} />
         <Stack.Screen name="profile/index" options={{ ...brandedHeader, title: "My profile" }} />
         <Stack.Screen name="profile/file-complaint" options={{ ...brandedHeader, title: "Support complaint" }} />
-        <Stack.Screen name="profile/analytics" options={{ ...brandedHeader, title: "My analytics" }} />
         <Stack.Screen name="profile/delete-account" options={{ ...brandedHeader, title: "Delete account" }} />
         <Stack.Screen name="legal/privacy" options={{ ...brandedHeader, title: "Privacy Policy" }} />
         <Stack.Screen name="legal/terms" options={{ ...brandedHeader, title: "Terms of Service" }} />
@@ -206,7 +205,6 @@ function RootNavigator() {
         <Stack.Screen name="change-password" options={{ gestureEnabled: false }} />
         <Stack.Screen name="receipt" options={{ ...brandedHeader, title: "Receipt" }} />
         <Stack.Screen name="nova" options={{ ...brandedHeader, title: "Nova" }} />
-        <Stack.Screen name="customize" />
       </Stack>
 
       {/* Covers the app until we know who is signed in, so nobody sees a
